@@ -1,0 +1,277 @@
+:root {
+  --bg: #040711;
+  --bg-soft: rgba(10, 15, 30, 0.85);
+  --card: rgba(13, 20, 38, 0.88);
+  --line: rgba(148, 163, 184, 0.25);
+  --text: #e8edf9;
+  --muted: #97a7c2;
+  --accent: #14b8a6;
+  --accent-soft: rgba(20, 184, 166, 0.2);
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+}
+
+:root[data-theme='light'] {
+  --bg: #f2f5fb;
+  --bg-soft: #ffffff;
+  --card: #ffffff;
+  --line: rgba(15, 23, 42, 0.14);
+  --text: #0f172a;
+  --muted: #4b5563;
+  --accent: #0f766e;
+  --accent-soft: rgba(15, 118, 110, 0.12);
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  color: var(--text);
+  background: radial-gradient(circle at top, #13203f, var(--bg) 45%);
+}
+
+.layout {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 250px 1fr;
+}
+
+.sidebar {
+  border-right: 1px solid var(--line);
+  background: var(--bg-soft);
+  backdrop-filter: blur(10px);
+  padding: 22px 14px;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+.brand { font-size: 1.2rem; font-weight: 700; margin-bottom: 16px; }
+.langSwitch { display: flex; gap: 6px; margin-bottom: 14px; }
+.langSwitch button {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  border-radius: 8px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.langSwitch button.active { background: var(--accent-soft); color: var(--text); }
+.menu { display: grid; gap: 8px; }
+.menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+.menu button.active, .menu button:hover { background: var(--accent-soft); color: var(--text); }
+.menuIcon { display: inline-flex; }
+.menuSection {
+  margin: 10px 8px 2px;
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.content { padding: 20px; }
+.topbar { display: flex; gap: 14px; align-items: center; margin-bottom: 18px; }
+.topbar h1 { margin: 0; font-size: 1.35rem; }
+.topbar p { margin: 4px 0 0; color: var(--muted); }
+.tenantSelect {
+  margin-left: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  padding: 8px 10px;
+}
+.menuToggle {
+  display: none;
+  border: 1px solid var(--line);
+  color: var(--text);
+  background: transparent;
+  border-radius: 10px;
+  padding: 8px 12px;
+}
+
+.kpiGrid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.contentGrid {
+  margin-top: 12px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 2fr 1fr;
+}
+.contentGrid.single { grid-template-columns: 1fr; }
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 14px;
+}
+
+.wide { min-height: 320px; }
+.muted { color: var(--muted); margin: 0; }
+h2 { margin: 8px 0; }
+.delta { color: var(--accent); font-weight: 600; }
+
+.tableWrap { overflow: auto; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 10px 6px; border-bottom: 1px solid var(--line); font-size: 0.92rem; }
+th { color: var(--muted); }
+.badge {
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  color: var(--accent);
+  padding: 4px 8px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+}
+
+.staffRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid var(--line);
+  padding: 10px 0;
+}
+.staffMeta { display: grid; gap: 3px; text-align: right; color: var(--text); }
+
+.plansGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.planCard {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px;
+  background: transparent;
+}
+.planCard h4 { margin: 0 0 8px; }
+.price { font-size: 1.25rem; font-weight: 700; margin: 8px 0; }
+.cardHead { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 10px; }
+
+.primaryBtn, .ghostBtn {
+  border-radius: 10px;
+  padding: 8px 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.primaryBtn {
+  border: 1px solid color-mix(in srgb, var(--accent) 65%, transparent);
+  color: var(--text);
+  background: var(--accent-soft);
+}
+.ghostBtn {
+  border: 1px solid var(--line);
+  color: var(--text);
+  background: transparent;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.modalBackdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(2, 6, 23, 0.68);
+  display: grid;
+  place-items: center;
+  z-index: 100;
+}
+.modalCard {
+  width: min(680px, calc(100% - 24px));
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--card);
+  padding: 16px;
+}
+.formGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 10px;
+}
+.formGrid label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+.formGrid input,
+.formGrid select {
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--text);
+  padding: 9px 10px;
+}
+.modalActions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+.actionBtns { display: flex; gap: 6px; flex-wrap: wrap; }
+.loginCard { margin-bottom: 12px; }
+.profileSwitch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.profileSwitch button {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--text);
+  border-radius: 10px;
+  padding: 7px 10px;
+  cursor: pointer;
+}
+.profileSwitch button.active {
+  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+  background: var(--accent-soft);
+}
+.sessionBar {
+  margin-bottom: 12px;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: var(--bg-soft);
+}
+
+@media (max-width: 980px) {
+  .kpiGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .contentGrid { grid-template-columns: 1fr; }
+  .plansGrid { grid-template-columns: 1fr 1fr; }
+}
+
+@media (max-width: 760px) {
+  .layout { grid-template-columns: 1fr; }
+  .menuToggle { display: inline-block; }
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: -100%;
+    height: 100%;
+    width: 240px;
+    z-index: 50;
+    transition: left 0.25s ease;
+  }
+  .sidebar.open { left: 0; }
+  .content { padding: 14px; }
+  .tenantSelect { margin-left: 0; width: 100%; }
+  .kpiGrid { grid-template-columns: 1fr; }
+  .plansGrid { grid-template-columns: 1fr; }
+  .formGrid { grid-template-columns: 1fr; }
+  .sessionBar { flex-direction: column; align-items: flex-start; }
+}
