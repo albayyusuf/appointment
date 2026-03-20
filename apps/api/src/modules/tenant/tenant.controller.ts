@@ -34,4 +34,22 @@ export class TenantController {
   setCurrency(@Req() req: TenantRequest, @Body() body: { currency: string }) {
     return this.tenantService.setDefaultCurrency(getTenantId(req), body.currency);
   }
+
+  @Get('roles')
+  listRoles(@Req() req: TenantRequest) {
+    return this.tenantService.listRoles(getTenantId(req));
+  }
+
+  @Post('roles')
+  createRole(
+    @Req() req: TenantRequest,
+    @Body() body: { code: string; name: string; description?: string },
+  ) {
+    return this.tenantService.createRole({
+      tenantId: getTenantId(req),
+      code: body.code,
+      name: body.name,
+      description: body.description,
+    });
+  }
 }

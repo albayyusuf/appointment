@@ -25,6 +25,15 @@
 
 [Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
 
+### AppointmentOS — SaaS paketleri ve ödeme
+
+- **Paketler:** `Plan` modeli (`sortOrder`, `badgeLabel`, `stripePriceId`, `featureLines`). Public liste: `GET /saas/plans`.
+- **Platform yönetimi (süper admin paneli):** `GET|POST|PATCH /platform/plans`, `GET|POST|PATCH /platform/bank-accounts`.
+- **Havale/EFT:** `GET /saas/bank-accounts` (aktif hesaplar). Seed’de örnek IBAN.
+- **Stripe:** `POST /saas/stripe/checkout-session` — `STRIPE_SECRET_KEY` ve planda `stripePriceId` (Stripe Price ID) gerekir.
+- **CORS:** `main.ts` içinde `enableCors`; production’da `CORS_ORIGIN=https://app.example.com,https://www.example.com`.
+- **Migration:** `npm run db:migrate` veya `npx prisma migrate deploy` (CI/production).
+
 ## Project setup
 
 ```bash

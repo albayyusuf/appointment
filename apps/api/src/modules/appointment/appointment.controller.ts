@@ -14,12 +14,38 @@ export class AppointmentController {
     @Query('branchId') branchId: string,
     @Query('serviceId') serviceId: string,
     @Query('date') date: string,
+    @Query('staffUserId') staffUserId?: string,
   ) {
     return this.appointmentService.getGuestAvailability({
       tenantId: getTenantId(req),
       branchId,
       serviceId,
       date,
+      staffUserId: staffUserId || undefined,
+    });
+  }
+
+  @Get('guest/customer-notifications')
+  customerNotifications(@Req() req: TenantRequest, @Query('phone') phone?: string, @Query('email') email?: string) {
+    return this.appointmentService.getCustomerNotifications({
+      tenantId: getTenantId(req),
+      phone,
+      email,
+    });
+  }
+
+  @Get('guest/staff-calendar')
+  staffCalendar(
+    @Req() req: TenantRequest,
+    @Query('branchId') branchId: string,
+    @Query('date') date: string,
+    @Query('serviceId') serviceId?: string,
+  ) {
+    return this.appointmentService.getStaffDayCalendar({
+      tenantId: getTenantId(req),
+      branchId,
+      date,
+      serviceId,
     });
   }
 
@@ -31,6 +57,7 @@ export class AppointmentController {
       branchId: string;
       customerName: string;
       customerPhone?: string;
+      customerEmail?: string;
       serviceId: string;
       staffUserId: string;
       createdByUserId?: string;
@@ -53,8 +80,8 @@ export class AppointmentController {
   }
 
   @Get('employee/reservations')
-  listReservations(@Req() req: TenantRequest) {
-    return this.appointmentService.listReservations(getTenantId(req));
+  listReservations(@Req() req: TenantRequest, @Query('status') status?: AppointmentStatus) {
+    return this.appointmentService.listReservations(getTenantId(req), status);
   }
 
   @Post('employee/reservations/:id/approve')

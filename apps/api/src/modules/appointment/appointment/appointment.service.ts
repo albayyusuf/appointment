@@ -19,6 +19,7 @@ export class AppointmentService {
     branchId: string;
     customerName: string;
     customerPhone?: string;
+    customerEmail?: string;
     serviceId: string;
     staffUserId: string;
     createdByUserId?: string;
@@ -36,6 +37,7 @@ export class AppointmentService {
         tenantId: input.tenantId,
         fullName: input.customerName,
         phone: input.customerPhone,
+        email: input.customerEmail?.trim().toLowerCase() || undefined,
       },
     });
     const startsAt = new Date(input.startsAt);
@@ -79,10 +81,27 @@ export class AppointmentService {
         },
       },
     });
+    await this.prisma.auditLog.create({
+      data: {
+        tenantId: input.tenantId,
+        actorUserId: createdByUserId,
+        entityType: 'CUSTOMER_NOTIFICATION',
+        entityId: reservation.id,
+        action: 'GUEST_RESERVATION_CREATED',
+        metadata: {
+          appointmentId: reservation.id,
+          customerPhone: input.customerPhone,
+          customerEmail: input.customerEmail?.trim().toLowerCase() || undefined,
+          customerName: input.customerName,
+          startsAt: reservation.startsAt,
+          staffUserId: input.staffUserId,
+        },
+      },
+    });
     return reservation;
   }
 
-  async getGuestAvailability(input: { tenantId: string; branchId: string; serviceId: string; date: string }) {
+  async getGuestAvailability(input: { tenantId: string; branchId: string; serviceId: string; date: string; staffUserId?: string }) {
     const service = await this.prisma.service.findFirst({
       where: { id: input.serviceId, tenantId: input.tenantId, branchId: input.branchId, deletedAt: null },
     });
@@ -92,11 +111,14 @@ export class AppointmentService {
     const dayStart = new Date(`${input.date}T00:00:00.000Z`);
     const dayEnd = new Date(`${input.date}T23:59:59.999Z`);
 
-    const staff = await this.prisma.user.findMany({
+    let staff = await this.prisma.user.findMany({
       where: { tenantId: input.tenantId, branchId: input.branchId, isStaff: true, deletedAt: null },
       select: { id: true, fullName: true },
       orderBy: { fullName: 'asc' },
     });
+    if (input.staffUserId) {
+      staff = staff.filter((s) => s.id === input.staffUserId);
+    }
     if (staff.length === 0) return [];
 
     const appointments = await this.prisma.appointment.findMany({
@@ -110,24 +132,31 @@ export class AppointmentService {
       select: { staffUserId: true, startsAt: true, endsAt: true },
     });
 
-    const openingHour = 9;
-    const closingHour = 18;
+    const schedules = await this.prisma.schedule.findMany({
+      where: {
+        tenantId: input.tenantId,
+        branchId: input.branchId,
+        staffUserId: { in: staff.map((s) => s.id) },
+        startsAt: { gte: dayStart, lte: dayEnd },
+      },
+      orderBy: { startsAt: 'asc' },
+    });
+    const schedulesByStaff = schedules.reduce<Record<string, Array<{ startsAt: Date; endsAt: Date }>>>((acc, row) => {
+      if (!acc[row.staffUserId]) acc[row.staffUserId] = [];
+      acc[row.staffUserId].push({ startsAt: row.startsAt, endsAt: row.endsAt });
+      return acc;
+    }, {});
+
     const slotStepMin = 30;
     const slots: Array<{ staffUserId: string; staffName: string; startsAt: string; endsAt: string }> = [];
     for (const worker of staff) {
-      for (let hour = openingHour; hour < closingHour; hour += 1) {
-        for (let minute = 0; minute < 60; minute += slotStepMin) {
-          const startsAt = new Date(dayStart);
-          startsAt.setUTCHours(hour, minute, 0, 0);
+      const windows = schedulesByStaff[worker.id] ?? [];
+      for (const window of windows) {
+        for (let cursor = new Date(window.startsAt); cursor < window.endsAt; cursor = new Date(cursor.getTime() + slotStepMin * 60 * 1000)) {
+          const startsAt = new Date(cursor);
           const endsAt = new Date(startsAt.getTime() + service.durationMin * 60 * 1000);
-          if (endsAt.getUTCHours() >= closingHour && endsAt.getUTCMinutes() > 0) continue;
-
-          const hasConflict = appointments.some(
-            (a) =>
-              a.staffUserId === worker.id &&
-              startsAt < a.endsAt &&
-              endsAt > a.startsAt,
-          );
+          if (endsAt > window.endsAt) continue;
+          const hasConflict = appointments.some((a) => a.staffUserId === worker.id && startsAt < a.endsAt && endsAt > a.startsAt);
           if (!hasConflict) {
             slots.push({
               staffUserId: worker.id,
@@ -142,6 +171,66 @@ export class AppointmentService {
     return slots.slice(0, 50);
   }
 
+  async getStaffDayCalendar(input: { tenantId: string; branchId: string; date: string; serviceId?: string }) {
+    const dayStart = new Date(`${input.date}T00:00:00.000Z`);
+    const dayEnd = new Date(`${input.date}T23:59:59.999Z`);
+    const serviceDurationMin = input.serviceId
+      ? (await this.prisma.service.findFirst({
+          where: { id: input.serviceId, tenantId: input.tenantId, branchId: input.branchId, deletedAt: null },
+          select: { durationMin: true },
+        }))?.durationMin ?? 30
+      : 30;
+    const staff = await this.prisma.user.findMany({
+      where: { tenantId: input.tenantId, branchId: input.branchId, isStaff: true, deletedAt: null },
+      select: { id: true, fullName: true },
+      orderBy: { fullName: 'asc' },
+    });
+    const schedules = await this.prisma.schedule.findMany({
+      where: {
+        tenantId: input.tenantId,
+        branchId: input.branchId,
+        staffUserId: { in: staff.map((s) => s.id) },
+        startsAt: { gte: dayStart, lte: dayEnd },
+      },
+      orderBy: { startsAt: 'asc' },
+    });
+    const appointments = await this.prisma.appointment.findMany({
+      where: {
+        tenantId: input.tenantId,
+        branchId: input.branchId,
+        staffUserId: { in: staff.map((s) => s.id) },
+        startsAt: { gte: dayStart, lte: dayEnd },
+        status: { in: [AppointmentStatus.PENDING, AppointmentStatus.CONFIRMED, AppointmentStatus.IN_PROGRESS] },
+      },
+      select: { id: true, staffUserId: true, startsAt: true, endsAt: true, status: true },
+      orderBy: { startsAt: 'asc' },
+    });
+    const schedulesByStaff = schedules.reduce<Record<string, Array<{ startsAt: Date; endsAt: Date }>>>((acc, row) => {
+      if (!acc[row.staffUserId]) acc[row.staffUserId] = [];
+      acc[row.staffUserId].push({ startsAt: row.startsAt, endsAt: row.endsAt });
+      return acc;
+    }, {});
+    const appointmentCountByStaff = appointments.reduce<Record<string, number>>((acc, row) => {
+      acc[row.staffUserId] = (acc[row.staffUserId] ?? 0) + 1;
+      return acc;
+    }, {});
+    return staff.map((worker) => {
+      const windows = schedulesByStaff[worker.id] ?? [];
+      const totalWorkMin = windows.reduce((sum, w) => sum + (w.endsAt.getTime() - w.startsAt.getTime()) / 60000, 0);
+      const offDay = windows.length === 0;
+      const capacitySlots = Math.floor(totalWorkMin / serviceDurationMin);
+      const booked = appointmentCountByStaff[worker.id] ?? 0;
+      return {
+        staffUserId: worker.id,
+        staffName: worker.fullName,
+        offDay,
+        shifts: windows.map((w) => ({ startsAt: w.startsAt.toISOString(), endsAt: w.endsAt.toISOString() })),
+        bookedCount: booked,
+        freeCount: Math.max(capacitySlots - booked, 0),
+      };
+    });
+  }
+
   async changeStatus(input: {
     tenantId: string;
     appointmentId: string;
@@ -152,7 +241,7 @@ export class AppointmentService {
   }) {
     const appointment = await this.prisma.appointment.findFirst({
       where: { id: input.appointmentId, tenantId: input.tenantId },
-      include: { service: true },
+      include: { service: true, customer: { select: { phone: true, email: true, fullName: true } } },
     });
     if (!appointment) {
       throw new NotFoundException('Appointment not found');
@@ -218,7 +307,48 @@ export class AppointmentService {
         },
       },
     });
+    await this.prisma.auditLog.create({
+      data: {
+        tenantId: input.tenantId,
+        actorUserId: changedByUserId,
+        entityType: 'CUSTOMER_NOTIFICATION',
+        entityId: appointment.id,
+        action: `APPOINTMENT_${input.toStatus}`,
+        metadata: {
+          appointmentId: appointment.id,
+          customerPhone: appointment.customer.phone,
+          customerEmail: appointment.customer.email?.toLowerCase(),
+          customerName: appointment.customer.fullName,
+          toStatus: input.toStatus,
+          staffUserId: appointment.staffUserId,
+        },
+      },
+    });
     return updated;
+  }
+
+  async getCustomerNotifications(input: { tenantId: string; phone?: string; email?: string }) {
+    const phone = input.phone?.trim();
+    const email = input.email?.trim().toLowerCase();
+    if (!phone && !email) {
+      throw new BadRequestException('phone or email required');
+    }
+    const or: Array<Record<string, unknown>> = [];
+    if (phone) {
+      or.push({ metadata: { path: ['customerPhone'], equals: phone } });
+    }
+    if (email) {
+      or.push({ metadata: { path: ['customerEmail'], equals: email } });
+    }
+    return this.prisma.auditLog.findMany({
+      where: {
+        tenantId: input.tenantId,
+        entityType: 'CUSTOMER_NOTIFICATION',
+        OR: or,
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+    });
   }
 
   async getStaffNotifications(input: { tenantId: string; staffUserId: string }) {
@@ -233,9 +363,12 @@ export class AppointmentService {
     });
   }
 
-  async listReservations(tenantId: string) {
+  async listReservations(tenantId: string, status?: AppointmentStatus) {
     return this.prisma.appointment.findMany({
-      where: { tenantId },
+      where: {
+        tenantId,
+        ...(status ? { status } : {}),
+      },
       orderBy: { startsAt: 'desc' },
       take: 200,
       include: {

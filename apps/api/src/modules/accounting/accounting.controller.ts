@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Req } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, Req } from '@nestjs/common';
 import type { TenantRequest } from '../../common/tenant-context.middleware';
 import { getTenantId } from '../../common/get-tenant-id';
 import { AccountingService } from './accounting.service';
@@ -8,8 +8,8 @@ export class AccountingController {
   constructor(private readonly accountingService: AccountingService) {}
 
   @Get('ledger')
-  list(@Req() req: TenantRequest) {
-    return this.accountingService.listLedger(getTenantId(req));
+  list(@Req() req: TenantRequest, @Query('type') type?: string) {
+    return this.accountingService.listLedger(getTenantId(req), type);
   }
 
   @Post('cash-in')

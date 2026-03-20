@@ -173,7 +173,7 @@ async function seedTenant(tenantMeta, plans, index) {
   }
 
   const customers = [];
-  for (let c = 0; c < 10; c += 1) {
+  for (let c = 0; c < 40; c += 1) {
     const customer = await prisma.customer.upsert({
       where: { id: `cus-${tenantMeta.slug}-${c + 1}` },
       update: { fullName: `${tenantMeta.name} Customer ${c + 1}` },
@@ -189,10 +189,50 @@ async function seedTenant(tenantMeta, plans, index) {
   }
 
   const now = new Date();
-  for (let i = 0; i < 20; i += 1) {
-    const startsAt = new Date(now.getTime() + (i + 1) * 45 * 60 * 1000);
-    const endsAt = new Date(startsAt.getTime() + 30 * 60 * 1000);
-    const status = i % 5 === 0 ? AppointmentStatus.IN_PROGRESS : i % 2 === 0 ? AppointmentStatus.CONFIRMED : AppointmentStatus.PENDING;
+  const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+
+  // Staff weekly shifts with deterministic off-days.
+  for (let s = 0; s < staffUsers.length; s += 1) {
+    for (let d = -2; d < 14; d += 1) {
+      const day = new Date(today.getTime() + d * 24 * 60 * 60 * 1000);
+      const weekday = day.getUTCDay(); // 0 sun ... 6 sat
+      const offDayRule = (weekday === 0) || ((s + index) % 2 === 0 && weekday === 2) || ((s + index) % 2 === 1 && weekday === 5);
+      if (offDayRule) continue;
+      const shiftStart = new Date(day);
+      shiftStart.setUTCHours(8 + (s % 2), 0, 0, 0);
+      const shiftEnd = new Date(day);
+      shiftEnd.setUTCHours(17 + (s % 2), 0, 0, 0);
+      await prisma.schedule.upsert({
+        where: { id: `sch-${tenantMeta.slug}-${staffUsers[s].id}-${d}` },
+        update: { startsAt: shiftStart, endsAt: shiftEnd },
+        create: {
+          id: `sch-${tenantMeta.slug}-${staffUsers[s].id}-${d}`,
+          tenantId: tenant.id,
+          branchId: staffUsers[s].branchId ?? branches[0].id,
+          staffUserId: staffUsers[s].id,
+          startsAt: shiftStart,
+          endsAt: shiftEnd,
+        },
+      });
+    }
+  }
+
+  for (let i = 0; i < 80; i += 1) {
+    const dayOffset = Math.floor(i / 8) - 2;
+    const day = new Date(today.getTime() + dayOffset * 24 * 60 * 60 * 1000);
+    const hour = 9 + (i % 8);
+    const startsAt = new Date(day);
+    startsAt.setUTCHours(hour, (i % 2) * 30, 0, 0);
+    const service = services[i % services.length];
+    const endsAt = new Date(startsAt.getTime() + service.durationMin * 60 * 1000);
+    const status =
+      i % 7 === 0
+        ? AppointmentStatus.COMPLETED
+        : i % 5 === 0
+          ? AppointmentStatus.IN_PROGRESS
+          : i % 2 === 0
+            ? AppointmentStatus.CONFIRMED
+            : AppointmentStatus.PENDING;
 
     const appointment = await prisma.appointment.upsert({
       where: { id: `appt-${tenantMeta.slug}-${i + 1}` },
@@ -202,7 +242,7 @@ async function seedTenant(tenantMeta, plans, index) {
         tenantId: tenant.id,
         branchId: branches[i % branches.length].id,
         customerId: customers[i % customers.length].id,
-        serviceId: services[i % services.length].id,
+        serviceId: service.id,
         staffUserId: staffUsers[i % staffUsers.length].id,
         createdByUserId: adminUser.id,
         startsAt,
@@ -224,6 +264,22 @@ async function seedTenant(tenantMeta, plans, index) {
         toStatus: status,
       },
     });
+
+    if (status === AppointmentStatus.COMPLETED) {
+      await prisma.ledgerEntry.upsert({
+        where: { id: `ledger-${tenantMeta.slug}-${i + 1}` },
+        update: { amount: service.priceAmount, currency: service.currency },
+        create: {
+          id: `ledger-${tenantMeta.slug}-${i + 1}`,
+          tenantId: tenant.id,
+          appointmentId: appointment.id,
+          type: 'INCOME',
+          amount: service.priceAmount,
+          currency: service.currency,
+          description: `Seed completed appointment income ${appointment.id}`,
+        },
+      });
+    }
   }
 
   const selectedPlan = plans.find((p) => p.code === tenantMeta.planCode) ?? plans[0];
@@ -277,53 +333,143 @@ async function main() {
     },
   });
 
+  const starterFeatures = [
+    'Güzellik salonu, barber, nail: tek–çift şube',
+    'Misafir rezervasyonu, çalışan takvimi, bildirimler',
+    'Ön muhasebe / kasa kayıtları (paket kotasına göre)',
+  ];
+  const growthFeatures = [
+    'Klinik & çok şube: şube bazlı hizmet ve roller',
+    'Operasyon ekranı, atama, durum akışı',
+    'Raporlama ve SaaS faturalama entegrasyonuna hazır',
+  ];
+  const entFeatures = [
+    'Franchise / zincir: sınırsız şube kotası',
+    'Kurumsal SLA, özel entegrasyon ve veri izolasyonu',
+    'Havale/EFT + Stripe ile tahsilat (platform hesapları)',
+  ];
+
   const plans = await Promise.all([
     prisma.plan.upsert({
       where: { code: 'STARTER_MONTHLY' },
-      update: {},
+      update: {
+        name: 'Salon & Studio',
+        description: 'Güzellik, berber, nail ve tek şube işletmeleri için giriş paketi.',
+        sortOrder: 1,
+        badgeLabel: 'Başlangıç',
+        stripePriceId: null,
+        featureLines: starterFeatures,
+        priceAmount: 1299,
+        maxBranches: 2,
+        maxStaff: 18,
+        maxAppointmentsMo: 3500,
+        trialDays: 14,
+      },
       create: {
         code: 'STARTER_MONTHLY',
-        name: 'Starter',
-        description: 'Small teams and single branch businesses',
-        priceAmount: 1499,
+        name: 'Salon & Studio',
+        description: 'Güzellik, berber, nail ve tek şube işletmeleri için giriş paketi.',
+        sortOrder: 1,
+        badgeLabel: 'Başlangıç',
+        stripePriceId: null,
+        featureLines: starterFeatures,
+        priceAmount: 1299,
         currency: 'TRY',
         interval: BillingInterval.MONTHLY,
         maxBranches: 2,
-        maxStaff: 12,
-        maxAppointmentsMo: 2500,
+        maxStaff: 18,
+        maxAppointmentsMo: 3500,
+        trialDays: 14,
       },
     }),
     prisma.plan.upsert({
       where: { code: 'GROWTH_MONTHLY' },
-      update: {},
+      update: {
+        name: 'Klinik & Operasyon',
+        description: 'Sağlık, diş ve çok şubeli klinikler için operasyon odağı.',
+        sortOrder: 2,
+        badgeLabel: 'En çok tercih edilen',
+        stripePriceId: null,
+        featureLines: growthFeatures,
+        priceAmount: 3499,
+        maxBranches: 12,
+        maxStaff: 90,
+        maxAppointmentsMo: 30000,
+        trialDays: 14,
+      },
       create: {
         code: 'GROWTH_MONTHLY',
-        name: 'Growth',
-        description: 'Growing multi-branch companies',
-        priceAmount: 3999,
+        name: 'Klinik & Operasyon',
+        description: 'Sağlık, diş ve çok şubeli klinikler için operasyon odağı.',
+        sortOrder: 2,
+        badgeLabel: 'En çok tercih edilen',
+        stripePriceId: null,
+        featureLines: growthFeatures,
+        priceAmount: 3499,
         currency: 'TRY',
         interval: BillingInterval.MONTHLY,
-        maxBranches: 10,
-        maxStaff: 80,
-        maxAppointmentsMo: 25000,
+        maxBranches: 12,
+        maxStaff: 90,
+        maxAppointmentsMo: 30000,
+        trialDays: 14,
       },
     }),
     prisma.plan.upsert({
       where: { code: 'ENTERPRISE_YEARLY' },
-      update: {},
+      update: {
+        name: 'Zincir & Franchise',
+        description: 'Ülke çapı zincir, hastane grupları ve franchise yönetimi.',
+        sortOrder: 3,
+        badgeLabel: 'Kurumsal',
+        stripePriceId: null,
+        featureLines: entFeatures,
+        priceAmount: 34999,
+        maxBranches: 999,
+        maxStaff: 9999,
+        maxAppointmentsMo: 500000,
+        trialDays: 30,
+      },
       create: {
         code: 'ENTERPRISE_YEARLY',
-        name: 'Enterprise',
-        description: 'Franchise and hospital scale operations',
-        priceAmount: 39999,
+        name: 'Zincir & Franchise',
+        description: 'Ülke çapı zincir, hastane grupları ve franchise yönetimi.',
+        sortOrder: 3,
+        badgeLabel: 'Kurumsal',
+        stripePriceId: null,
+        featureLines: entFeatures,
+        priceAmount: 34999,
         currency: 'TRY',
         interval: BillingInterval.YEARLY,
         maxBranches: 999,
         maxStaff: 9999,
         maxAppointmentsMo: 500000,
+        trialDays: 30,
       },
     }),
   ]);
+
+  await prisma.platformBankAccount.upsert({
+    where: { id: 'seed-bank-main' },
+    update: {
+      label: 'Ana tahsilat (TRY)',
+      bankName: 'Türkiye İş Bankası',
+      accountHolder: 'AppointmentOS Teknoloji A.Ş.',
+      iban: 'TR330006100519786457841326',
+      swift: 'ISBKTRISXXX',
+      sortOrder: 0,
+      isActive: true,
+    },
+    create: {
+      id: 'seed-bank-main',
+      label: 'Ana tahsilat (TRY)',
+      bankName: 'Türkiye İş Bankası',
+      accountHolder: 'AppointmentOS Teknoloji A.Ş.',
+      iban: 'TR330006100519786457841326',
+      swift: 'ISBKTRISXXX',
+      sortOrder: 0,
+      isActive: true,
+    },
+  });
 
   for (const [index, seed] of tenantSeeds.entries()) {
     await seedTenant(seed, plans, index);

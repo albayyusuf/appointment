@@ -8,6 +8,12 @@ type BootstrapTenantInput = {
   vertical: VerticalType;
   defaultCurrency: string;
 };
+type CreateRoleInput = {
+  tenantId: string;
+  code: string;
+  name: string;
+  description?: string;
+};
 
 @Injectable()
 export class TenantService {
@@ -38,6 +44,34 @@ export class TenantService {
     return this.prisma.tenant.update({
       where: { id: tenantId },
       data: { defaultCurrency: currency.toUpperCase() },
+    });
+  }
+
+  listRoles(tenantId: string) {
+    return this.prisma.role.findMany({
+      where: { tenantId },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
+  createRole(input: CreateRoleInput) {
+    return this.prisma.role.upsert({
+      where: {
+        tenantId_code: {
+          tenantId: input.tenantId,
+          code: input.code.toUpperCase(),
+        },
+      },
+      update: {
+        name: input.name,
+        description: input.description,
+      },
+      create: {
+        tenantId: input.tenantId,
+        code: input.code.toUpperCase(),
+        name: input.name,
+        description: input.description,
+      },
     });
   }
 }

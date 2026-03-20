@@ -6,6 +6,13 @@ import basicAuth from 'express-basic-auth';
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
+  const corsOrigins = process.env.CORS_ORIGIN?.split(',').map((s) => s.trim()).filter(Boolean);
+  app.enableCors({
+    origin: corsOrigins && corsOrigins.length > 0 ? corsOrigins : true,
+    credentials: true,
+    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+  });
+
   const swaggerUser = process.env.SWAGGER_USER ?? 'admin';
   const swaggerPass = process.env.SWAGGER_PASS ?? 'ChangeMe123!';
   app.use(

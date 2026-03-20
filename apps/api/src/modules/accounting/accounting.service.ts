@@ -5,9 +5,12 @@ import { PrismaService } from '../prisma/prisma.service';
 export class AccountingService {
   constructor(private readonly prisma: PrismaService) {}
 
-  listLedger(tenantId: string) {
+  listLedger(tenantId: string, type?: string) {
     return this.prisma.ledgerEntry.findMany({
-      where: { tenantId },
+      where: {
+        tenantId,
+        ...(type ? { type } : {}),
+      },
       orderBy: { createdAt: 'desc' },
       take: 200,
     });

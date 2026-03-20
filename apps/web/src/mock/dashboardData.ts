@@ -1,13 +1,18 @@
 export const guestRows = [
-  { name: 'Ayse Demir', phone: '+90 530 111 11 11', latestReservation: 'Hair Cut - 10:30', status: 'VIP' },
-  { name: 'Mehmet Kaya', phone: '+90 530 222 22 22', latestReservation: 'Dental Check - 11:15', status: 'Regular' },
-  { name: 'John Doe', phone: '+90 530 333 33 33', latestReservation: 'Skin Care - 12:00', status: 'New' },
+  { name: 'Ayşe Demir', phone: '+90 530 111 11 11', latestReservation: 'Kesim + Fön — 10:30', status: 'VIP' },
+  { name: 'Mehmet Kaya', phone: '+90 530 222 22 22', latestReservation: 'Muayene — 11:15', status: 'Regular' },
+  { name: 'John Doe', phone: '+90 530 333 33 33', latestReservation: 'Hydrafacial — 12:00', status: 'New' },
+  { name: 'Zehra Polat', phone: '+90 530 444 44 44', latestReservation: 'Kanal tedavi — 14:00', status: 'Regular' },
+  { name: 'Can Erkin', phone: '+90 530 555 55 55', latestReservation: 'Efor testi — 09:15', status: 'VIP' },
 ];
 
 export const employeeRows = [
-  { fullName: 'Elif Yilmaz', role: 'Senior Stylist', branch: 'HQ', load: '87%' },
-  { fullName: 'Dr. Selim Turk', role: 'Dentist', branch: 'B1', load: '72%' },
-  { fullName: 'Merve Acar', role: 'Therapist', branch: 'B2', load: '64%' },
+  { fullName: 'Elif Yılmaz', role: 'Senior Stylist', branch: 'Çankaya HQ', load: '87%' },
+  { fullName: 'Dr. Selim Türk', role: 'Diş Hekimi', branch: 'Balgat', load: '72%' },
+  { fullName: 'Merve Acar', role: 'Medikal Estetik', branch: 'Etimesgut', load: '64%' },
+  { fullName: 'Deniz Koral', role: 'Colorist', branch: 'Alsancak', load: '91%' },
+  { fullName: 'Dr. Ayşe Korkmaz', role: 'Ortodonti', branch: 'Çankaya HQ', load: '58%' },
+  { fullName: 'Barış Önen', role: 'Resepsiyon', branch: 'Bornova', load: '44%' },
 ];
 
 export const managerRows = [
