@@ -95,48 +95,84 @@ npm run db:seed
 npm run build
 ```
 
-## Git push (GitHub)
+## Git push (GitHub) — Access Token (PAT)
 
-GitHub HTTPS ile hesap şifresi kabul etmez; **PAT** veya **SSH** kullanın.
+Bu repo: **`albayyusuf/appointment`**. HTTPS ile **hesap şifresi** kullanılamaz; **Personal Access Token (PAT)** gerekir.
 
-### PAT ile push (terminal — önerilen kullanım)
+**Token’ı README’ye, remote URL’ye kalıcı yazmayın ve sohbette paylaşmayın** — sızdıysa GitHub’da **hemen iptal** edin.
 
-**Gerçek token’ı bu dosyaya veya kalıcı `git remote` URL’sine yazmayın** (commit’lenirse herkes görür). PAT: GitHub → **Settings → Developer settings → Personal access tokens** (`repo` yetkisi). Eski bir token sızdıysa GitHub’da **iptal** edip yenisini oluşturun.
+### 1) PAT oluşturma
 
-**1) `origin` yoksa** (yeni klon / remote eklenmemiş):
+1. GitHub → **Settings → Developer settings → Personal access tokens**
+2. **Classic:** `repo` (tam depo erişimi) işaretleyin.  
+   **Fine-grained:** Bu repoyu seçin; **Contents: Read and write** (push için gerekli izinler).
+3. Oluşturduğunuz PAT’yi **yalnızca güvenli** bir yerde saklayın (bir kez gösterilir).
+
+### 2) Remote’u her zaman tokensız tutun
 
 ```bash
 cd /path/to/appointment
-git remote add origin https://github.com/albayyusuf/appointment.git
-git branch -M main
+git remote set-url origin https://github.com/albayyusuf/appointment.git
+git remote -v
+```
+
+`origin` satırında **`ghp_` veya şifre görünmemeli**; sadece `https://github.com/albayyusuf/appointment.git` olmalı.
+
+### 3) Push — PAT ile (önerilen)
+
+**A) İstemci şifre istesin (Keychain’e kaydedebilir)**
+
+```bash
 git push -u origin main
 ```
 
-İlk push’ta kullanıcı adı + şifre sorarsa **şifre yerine PAT** girin (token’ı URL’ye yazmayın).
+- **Username:** `albayyusuf` (repo sahibi olan GitHub kullanıcı adı; token hangi hesaptaysa o hesabın adı)  
+- **Password:** PAT’yi yapıştırın (hesap şifresi değil).
 
-**2) PAT’yi URL’de tek sefer kullanmak** (yalnızca terminalde; `KULLANICI_ADINIZ` ve `GITHUB_PAT` kendi değerleriniz):
+**B) Keychain’i devre dışı bırakıp tek seferde URL ile push** (token’ı yalnızca terminalde; `YENİ_PAT` yerine kendi PAT’nizi yazın)
 
 ```bash
-cd /path/to/appointment
-git push https://KULLANICI_ADINIZ:GITHUB_PAT@github.com/albayyusuf/appointment.git main
+git -c credential.helper= push https://albayyusuf:YENİ_PAT@github.com/albayyusuf/appointment.git main
 ```
 
 Mevcut branch’i uzaktaki `main`’e göndermek için:
 
 ```bash
-git push https://KULLANICI_ADINIZ:GITHUB_PAT@github.com/albayyusuf/appointment.git HEAD:main
+git -c credential.helper= push https://albayyusuf:YENİ_PAT@github.com/albayyusuf/appointment.git HEAD:main
 ```
 
-**3) `origin` zaten varsa** token’lı URL eklemeyin; güncellemek için:
+Push bittikten sonra yine kontrol edin:
 
 ```bash
 git remote set-url origin https://github.com/albayyusuf/appointment.git
-git push origin main
 ```
 
-Push sonrası `git remote -v` çıktısında **asla** `ghp_...` görünmemeli; görünüyorsa yukarıdaki gibi HTTPS URL’yi token’sız ayarlayın.
+### 4) `Invalid username or token` hatası
 
-### Alternatif: token’ı URL’ye hiç yazmadan
+| Olası neden | Ne yapmalı |
+|-------------|------------|
+| PAT iptal / süresi dolmuş / sızdı | Yeni PAT oluştur, eskisini iptal et. |
+| macOS Keychain eski kayıt kullanıyor | Aşağıdaki komutla `github.com` için silin, sonra tekrar push. |
+| Fine-grained yetki eksik | Repo için **Contents: Read and write** veya classic **`repo`**. |
+| Yanlış hesap | `albayyusuf/appointment` için **yazma** yetkisi olan hesabın PAT’si olmalı. |
+
+Keychain’i temizlemek (isteğe bağlı):
+
+```bash
+git remote set-url origin https://github.com/albayyusuf/appointment.git
+printf "protocol=https\nhost=github.com\n" | git credential-osxkeychain erase
+git push -u origin main
+```
+
+### 5) Sadece bu projede Git kullanıcı adı / e-posta (global’i bozmaz)
+
+```bash
+cd /path/to/appointment
+git config --local user.name "İsim"
+git config --local user.email "email@ornek.com"
+```
+
+### 6) İsteğe bağlı: GitHub CLI
 
 ```bash
 gh auth login
@@ -144,32 +180,8 @@ cd /path/to/appointment
 git push origin main
 ```
 
-**SSH:**
+`gh` hesabı makinede genel etkiler; PAT yöntemiyle karıştırmak istemezseniz yukarıdaki HTTPS + PAT adımları yeterlidir.
 
-```bash
-git remote set-url origin git@github.com:albayyusuf/appointment.git
-git push origin main
-```
+### 7) SSH alternatifi
 
-### Push hata verirse: `Invalid username or token`
-
-Olası nedenler:
-
-| Olası neden | Ne yapmalı |
-|-------------|------------|
-| `git remote` URL’sinde token **iptal** veya **süresi dolmuş** | GitHub’da yeni PAT oluştur; sızdıysa eskisini iptal et. |
-| **macOS Keychain** eski/yanlış şifre saklıyor | `git push` sırasında URL’deki token yerine Keychain’deki kayıt kullanılabilir. |
-| **Fine-grained** PAT | Repo’ya **Contents: Read and write** veya klasik PAT’ta **`repo`** yetkisi olmalı. |
-| Yanlış hesap | `albayyusuf/appointment` için push yetkisi olan GitHub hesabıyla giriş yapılmalı. |
-
-Token’sız URL’ye dönün ve kimlik bilgisini temizleyin:
-
-```bash
-git remote set-url origin https://github.com/albayyusuf/appointment.git
-# macOS: GitHub için eski kaydı silmek (isteğe bağlı)
-printf "protocol=https\nhost=github.com\n" | git credential-osxkeychain erase
-```
-
-Sonra `git push origin main` — kullanıcı adı: **GitHub kullanıcı adınız**, şifre: **yeni PAT** (şifre alanına yapıştırın).
-
-En sorunsuz yöntem: **`gh auth login`** (tarayıcı ile giriş) veya **SSH** kullanın.
+SSH kullanmak isterseniz: `git remote set-url origin git@github.com:albayyusuf/appointment.git` ve makinenize SSH anahtarı ekleyin.
