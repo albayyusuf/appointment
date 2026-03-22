@@ -101,26 +101,40 @@ GitHub HTTPS ile hesap şifresi kabul etmez; **PAT** veya **SSH** kullanın.
 
 ### PAT ile push (terminal — önerilen kullanım)
 
-**Gerçek token’ı bu dosyaya veya `git remote` URL’sine yazmayın** (commit’lenirse herkes görür). PAT: GitHub → **Settings → Developer settings → Personal access tokens** (`repo` yetkisi). Sızdırdıysanız token’ı **hemen iptal** edip yenisini oluşturun.
+**Gerçek token’ı bu dosyaya veya kalıcı `git remote` URL’sine yazmayın** (commit’lenirse herkes görür). PAT: GitHub → **Settings → Developer settings → Personal access tokens** (`repo` yetkisi). Eski bir token sızdıysa GitHub’da **iptal** edip yenisini oluşturun.
 
-Tek seferlik push (kullanıcı adı + PAT’yi **sadece terminalde** yapıştırın):
+**1) `origin` yoksa** (yeni klon / remote eklenmemiş):
 
 ```bash
 cd /path/to/appointment
-git push https://KULLANICI_ADINIZ:GITHUB_PAT_BURAYA@github.com/albayyusuf/appointment.git main
+git remote add origin https://github.com/albayyusuf/appointment.git
+git branch -M main
+git push -u origin main
 ```
 
-`origin` tanımlıysa ve branch adı `main` değilse:
+İlk push’ta kullanıcı adı + şifre sorarsa **şifre yerine PAT** girin (token’ı URL’ye yazmayın).
+
+**2) PAT’yi URL’de tek sefer kullanmak** (yalnızca terminalde; `KULLANICI_ADINIZ` ve `GITHUB_PAT` kendi değerleriniz):
 
 ```bash
-git push https://KULLANICI_ADINIZ:GITHUB_PAT_BURAYA@github.com/albayyusuf/appointment.git HEAD:main
+cd /path/to/appointment
+git push https://KULLANICI_ADINIZ:GITHUB_PAT@github.com/albayyusuf/appointment.git main
 ```
 
-Push bittikten sonra remote’ta token kalmaması için:
+Mevcut branch’i uzaktaki `main`’e göndermek için:
+
+```bash
+git push https://KULLANICI_ADINIZ:GITHUB_PAT@github.com/albayyusuf/appointment.git HEAD:main
+```
+
+**3) `origin` zaten varsa** token’lı URL eklemeyin; güncellemek için:
 
 ```bash
 git remote set-url origin https://github.com/albayyusuf/appointment.git
+git push origin main
 ```
+
+Push sonrası `git remote -v` çıktısında **asla** `ghp_...` görünmemeli; görünüyorsa yukarıdaki gibi HTTPS URL’yi token’sız ayarlayın.
 
 ### Alternatif: token’ı URL’ye hiç yazmadan
 
