@@ -150,3 +150,26 @@ git push origin main
 git remote set-url origin git@github.com:albayyusuf/appointment.git
 git push origin main
 ```
+
+### Push hata verirse: `Invalid username or token`
+
+Olası nedenler:
+
+| Olası neden | Ne yapmalı |
+|-------------|------------|
+| `git remote` URL’sinde token **iptal** veya **süresi dolmuş** | GitHub’da yeni PAT oluştur; sızdıysa eskisini iptal et. |
+| **macOS Keychain** eski/yanlış şifre saklıyor | `git push` sırasında URL’deki token yerine Keychain’deki kayıt kullanılabilir. |
+| **Fine-grained** PAT | Repo’ya **Contents: Read and write** veya klasik PAT’ta **`repo`** yetkisi olmalı. |
+| Yanlış hesap | `albayyusuf/appointment` için push yetkisi olan GitHub hesabıyla giriş yapılmalı. |
+
+Token’sız URL’ye dönün ve kimlik bilgisini temizleyin:
+
+```bash
+git remote set-url origin https://github.com/albayyusuf/appointment.git
+# macOS: GitHub için eski kaydı silmek (isteğe bağlı)
+printf "protocol=https\nhost=github.com\n" | git credential-osxkeychain erase
+```
+
+Sonra `git push origin main` — kullanıcı adı: **GitHub kullanıcı adınız**, şifre: **yeni PAT** (şifre alanına yapıştırın).
+
+En sorunsuz yöntem: **`gh auth login`** (tarayıcı ile giriş) veya **SSH** kullanın.
