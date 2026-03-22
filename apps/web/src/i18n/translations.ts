@@ -119,6 +119,10 @@ export const translations = {
     restaurantPricingFailed: 'Kayıt başarısız. Yetki veya alanları kontrol edin.',
     overviewVerticalRestaurant: 'Restoran modu',
     overviewRestaurantHint: 'Alan bazlı rezervasyon ve önemli gün fiyatlarını Operasyon Merkezi’nden yönetin.',
+    overviewGoOperations: 'Operasyon merkezine git',
+    restaurantAreaOpsHint:
+      'Alanlar şube ile ilişkilidir; misafir rezervasyonunda şube seçildikten sonra listelenir. Önemli gün fiyatı bu sekmedeki karttan yönetilir.',
+    notificationsLoadFailed: 'Çalışan bildirimleri yüklenemedi',
     billingRenewalTitle: 'Yenileme takvimi',
     billingRenewalLead:
       'Aktif abonelikte bir sonraki tahsilat tarihi aşağıdadır. Deneme süresindeyseniz bitişten sonra ücretlendirme başlar.',
@@ -616,6 +620,10 @@ export const translations = {
     restaurantPricingFailed: 'Save failed. Check permissions or fields.',
     overviewVerticalRestaurant: 'Restaurant mode',
     overviewRestaurantHint: 'Manage area-based booking and special-day pricing under Operations.',
+    overviewGoOperations: 'Open operations center',
+    restaurantAreaOpsHint:
+      'Areas are tied to branches; guests see them after picking a branch. Configure special-day pricing in the card below.',
+    notificationsLoadFailed: 'Could not load staff notifications',
     billingRenewalTitle: 'Renewal schedule',
     billingRenewalLead:
       'When your subscription is active, the next charge is planned below. During trial, billing starts after trial end.',

@@ -40,7 +40,7 @@ import {
   Users,
   Wrench,
 } from 'lucide-react';
-import { apiDelete, apiGet, apiGetWithHeaders, apiPatch, apiPost } from './core/api/client';
+import { apiDelete, apiGet, apiGetWithHeaders, apiPatch, apiPost, getApiErrorMessage } from './core/api/client';
 import { translations, type Lang } from './i18n/translations';
 import { employeeRows, managerRows } from './mock/dashboardData';
 import {
@@ -204,9 +204,17 @@ type ReservationRow = {
   /** Güzellik / sağlık */
   staffUser: { fullName: string } | null;
   /** RESTAURANT: alan adı (staffUser boş olabilir) */
-  restaurantArea?: { name: string; code?: string } | null;
+  restaurantArea?: { name: string; code?: string; revenueLabel?: string | null } | null;
   branch: { name: string };
 };
+
+function formatReservationStaffOrArea(row: ReservationRow): string {
+  if (row.staffUser?.fullName) return row.staffUser.fullName;
+  const a = row.restaurantArea;
+  if (!a?.name) return '—';
+  if (a.revenueLabel) return `${a.name} (${a.revenueLabel})`;
+  return a.code ? `${a.name} (${a.code})` : a.name;
+}
 type BranchPricingDayRow = {
   id: string;
   date: string;
@@ -242,7 +250,7 @@ type ScheduleRow = {
   id: string;
   startsAt: string;
   endsAt: string;
-  staffUser: { id: string; fullName: string; email: string };
+  staffUser?: { id: string; fullName: string; email: string } | null;
   branch: { id: string; name: string; code: string };
 };
 
@@ -1548,8 +1556,8 @@ export function App() {
         );
         setCustomerNotifs(rows);
       }
-    } catch {
-      setActionMessage(t.reserveFail);
+    } catch (err) {
+      setActionMessage(`${t.reserveFail}: ${getApiErrorMessage(err)}`);
     } finally {
       setReservationSubmitting(false);
     }
@@ -3362,9 +3370,12 @@ export function App() {
                 {useRestaurantAreas ? (
                   <div className="overviewVerticalBanner overviewVerticalBanner--restaurant">
                     <Utensils size={22} strokeWidth={1.75} aria-hidden className="overviewVerticalBannerIcon" />
-                    <div>
+                    <div className="overviewVerticalBannerBody">
                       <strong className="overviewVerticalBannerTitle">{t.overviewVerticalRestaurant}</strong>
                       <p className="muted overviewVerticalBannerDesc">{t.overviewRestaurantHint}</p>
+                      <button type="button" className="ghostBtn overviewVerticalCta" onClick={() => onTabChange('operations')}>
+                        {t.overviewGoOperations}
+                      </button>
                     </div>
                   </div>
                 ) : null}
@@ -3666,8 +3677,8 @@ export function App() {
                                   );
                                   setTenantBilling(data);
                                   setActionMessage(t.paymentCompleteSuccess);
-                                } catch {
-                                  setActionMessage(t.paymentFailed);
+                                } catch (err) {
+                                  setActionMessage(`${t.paymentFailed}: ${getApiErrorMessage(err)}`);
                                 }
                               }}
                             >
@@ -4358,8 +4369,8 @@ export function App() {
                     try {
                       await apiPost('/tenants/settings/currency', { currency: currencyForm }, { 'x-tenant-id': selectedTenantId });
                       setActionMessage(t.currencyUpdated);
-                    } catch {
-                      setActionMessage(t.currencyUpdateFailed);
+                    } catch (err) {
+                      setActionMessage(`${t.currencyUpdateFailed}: ${getApiErrorMessage(err)}`);
                     }
                   }}
                 >
@@ -4380,8 +4391,8 @@ export function App() {
                       );
                       setBranchServices(rows);
                       setActionMessage(t.serviceCreated);
-                    } catch {
-                      setActionMessage(t.serviceCreateFailed);
+                    } catch (err) {
+                      setActionMessage(`${t.serviceCreateFailed}: ${getApiErrorMessage(err)}`);
                     }
                   }}
                 >
@@ -4439,8 +4450,8 @@ export function App() {
                                   );
                                   setBranchServices(rows);
                                   setActionMessage(t.serviceDeleted);
-                                } catch {
-                                  setActionMessage(t.serviceDeleteFailed);
+                                } catch (err) {
+                                  setActionMessage(`${t.serviceDeleteFailed}: ${getApiErrorMessage(err)}`);
                                 }
                               }}
                             >
@@ -4496,10 +4507,7 @@ export function App() {
                         <td>
                           {row.service.name} / {new Date(row.startsAt).toLocaleString()}
                         </td>
-                        <td>
-                          {row.staffUser?.fullName ??
-                            (row.restaurantArea?.name ? `${row.restaurantArea.name}${row.restaurantArea.code ? ` (${row.restaurantArea.code})` : ''}` : '—')}
-                        </td>
+                        <td>{formatReservationStaffOrArea(row)}</td>
                         <td>{row.branch.name}</td>
                         <td>
                           <span className="badge">{row.status}</span>
@@ -4525,8 +4533,8 @@ export function App() {
                                   );
                                   setReservations(reservationRows);
                                   setActionMessage(`${t.approved}: ${row.id}`);
-                                } catch {
-                                  setActionMessage(t.approveFailed);
+                                } catch (err) {
+                                  setActionMessage(`${t.approveFailed}: ${getApiErrorMessage(err)}`);
                                 }
                               }}
                             >
@@ -4551,8 +4559,8 @@ export function App() {
                                   );
                                   setReservations(reservationRows);
                                   setActionMessage(`${t.started}: ${row.id}`);
-                                } catch {
-                                  setActionMessage(t.startFailed);
+                                } catch (err) {
+                                  setActionMessage(`${t.startFailed}: ${getApiErrorMessage(err)}`);
                                 }
                               }}
                             >
@@ -4583,8 +4591,8 @@ export function App() {
                                   setReservations(reservationRows);
                                   setLedger(ledgerRows);
                                   setActionMessage(`${t.completedAndAccounted}: ${row.id}`);
-                                } catch {
-                                  setActionMessage(t.completeFailed);
+                                } catch (err) {
+                                  setActionMessage(`${t.completeFailed}: ${getApiErrorMessage(err)}`);
                                 }
                               }}
                             >
@@ -4610,8 +4618,8 @@ export function App() {
                                   );
                                   setReservations(reservationRows);
                                   setActionMessage(t.reservationCancelled);
-                                } catch {
-                                  setActionMessage(t.cancelFailed);
+                                } catch (err) {
+                                  setActionMessage(`${t.cancelFailed}: ${getApiErrorMessage(err)}`);
                                 }
                               }}
                             >
@@ -4682,8 +4690,8 @@ export function App() {
                           await refreshBranches();
                           setBranchCrudForm({ name: '', code: '', city: '' });
                           setActionMessage(t.branchCreated);
-                        } catch {
-                          setActionMessage(t.branchCreateFailed);
+                        } catch (err) {
+                          setActionMessage(`${t.branchCreateFailed}: ${getApiErrorMessage(err)}`);
                         }
                       }}
                     >
@@ -4722,8 +4730,8 @@ export function App() {
                                   setOpsBranchId('');
                                 }
                                 setActionMessage(t.branchDeleted);
-                              } catch {
-                                setActionMessage(t.branchDeleteFailed);
+                              } catch (err) {
+                                setActionMessage(`${t.branchDeleteFailed}: ${getApiErrorMessage(err)}`);
                               }
                             }}
                           >
@@ -4747,6 +4755,7 @@ export function App() {
                 </div>
                 <p className="muted">{t.restaurantOpsPricingLead}</p>
                 <p className="opsRestaurantFreePaid">{t.restaurantOpsFreeVsPaid}</p>
+                <p className="muted opsRestaurantAreaFlow">{t.restaurantAreaOpsHint}</p>
                 {selectedTenantId && isDemoTenantId(selectedTenantId) ? (
                   <>
                     <div className="demoPricingBanner">
@@ -4875,8 +4884,8 @@ export function App() {
                             );
                             setActionMessage(t.restaurantPricingSaved);
                             void reloadBranchPricingDays();
-                          } catch {
-                            setActionMessage(t.restaurantPricingFailed);
+                          } catch (err) {
+                            setActionMessage(`${t.restaurantPricingFailed}: ${getApiErrorMessage(err)}`);
                           }
                         }}
                       >
@@ -5019,8 +5028,8 @@ export function App() {
                           await reloadSchedules();
                           setScheduleCreateForm({ staffUserId: '', startsAt: '', endsAt: '' });
                           setActionMessage(t.scheduleCreated);
-                        } catch {
-                          setActionMessage(t.scheduleCreateFailed);
+                        } catch (err) {
+                          setActionMessage(`${t.scheduleCreateFailed}: ${getApiErrorMessage(err)}`);
                         }
                       }}
                     >
@@ -5042,7 +5051,7 @@ export function App() {
                   <tbody>
                     {scheduleRows.map((s) => (
                       <tr key={s.id}>
-                        <td>{s.staffUser.fullName}</td>
+                        <td>{s.staffUser?.fullName ?? '—'}</td>
                         <td>{s.branch.name}</td>
                         <td>
                           {new Date(s.startsAt).toLocaleString()} → {new Date(s.endsAt).toLocaleString()}
@@ -5058,8 +5067,8 @@ export function App() {
                                 await apiDelete(`/schedules/${s.id}`, { 'x-tenant-id': selectedTenantId });
                                 await reloadSchedules();
                                 setActionMessage(t.scheduleDeleted);
-                              } catch {
-                                setActionMessage(t.scheduleDeleteFailed);
+                              } catch (err) {
+                                setActionMessage(`${t.scheduleDeleteFailed}: ${getApiErrorMessage(err)}`);
                               }
                             }}
                           >
@@ -5102,8 +5111,9 @@ export function App() {
                         { 'x-tenant-id': selectedTenantId },
                       );
                       setNotifications(rows);
-                    } catch {
+                    } catch (err) {
                       setNotifications([]);
+                      setActionMessage(`${t.notificationsLoadFailed}: ${getApiErrorMessage(err)}`);
                     }
                   }}
                   disabled={!selectedStaffId}
@@ -5130,6 +5140,13 @@ export function App() {
                         </td>
                       </tr>
                     ))}
+                    {notifications.length === 0 ? (
+                      <tr>
+                        <td colSpan={3} className="muted">
+                          {t.noRecords}
+                        </td>
+                      </tr>
+                    ) : null}
                   </tbody>
                 </table>
               </div>
@@ -5200,8 +5217,8 @@ export function App() {
                         const ledgerRows = await apiGetWithHeaders<LedgerEntry[]>(`/accounting/ledger${ledgerQuery}`, { 'x-tenant-id': selectedTenantId });
                         setLedger(ledgerRows);
                         setActionMessage(t.cashInSuccess);
-                      } catch {
-                        setActionMessage(t.cashInFailed);
+                      } catch (err) {
+                        setActionMessage(`${t.cashInFailed}: ${getApiErrorMessage(err)}`);
                       }
                     }}
                   >
@@ -5226,26 +5243,20 @@ export function App() {
                           {t.ledgerEmptyHint}
                         </td>
                       </tr>
-                    ) : null}
-                    {ledger.map((row) => (
-                      <tr key={row.id}>
-                        <td>{new Date(row.createdAt).toLocaleString(lang === 'tr' ? 'tr-TR' : 'en-US')}</td>
-                        <td>
-                          <span className={`ledgerTypePill ledgerTypePill--${row.type}`}>{ledgerRowLabel(row.type)}</span>
-                        </td>
-                        <td>{row.description ?? '—'}</td>
-                        <td className="ledgerAmountCell">
-                          {row.amount} {row.currency}
-                        </td>
-                      </tr>
-                    ))}
-                    {ledger.length === 0 ? (
-                      <tr>
-                        <td colSpan={4} className="muted">
-                          {t.noRecords}
-                        </td>
-                      </tr>
-                    ) : null}
+                    ) : (
+                      ledger.map((row) => (
+                        <tr key={row.id}>
+                          <td>{new Date(row.createdAt).toLocaleString(lang === 'tr' ? 'tr-TR' : 'en-US')}</td>
+                          <td>
+                            <span className={`ledgerTypePill ledgerTypePill--${row.type}`}>{ledgerRowLabel(row.type)}</span>
+                          </td>
+                          <td>{row.description ?? '—'}</td>
+                          <td className="ledgerAmountCell">
+                            {row.amount} {row.currency}
+                          </td>
+                        </tr>
+                      ))
+                    )}
                   </tbody>
                 </table>
               </div>
@@ -5658,8 +5669,8 @@ export function App() {
                     setBranchServices(rows);
                     setServiceEditDraft(null);
                     setActionMessage(t.serviceUpdated);
-                  } catch {
-                    setActionMessage(t.serviceUpdateFailed);
+                  } catch (err) {
+                    setActionMessage(`${t.serviceUpdateFailed}: ${getApiErrorMessage(err)}`);
                   }
                 }}
               >

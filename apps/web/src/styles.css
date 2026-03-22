@@ -3514,6 +3514,18 @@ tbody tr:last-child td {
   font-size: 0.86rem;
   max-width: 52ch;
 }
+.overviewVerticalBannerBody {
+  flex: 1;
+  min-width: 0;
+}
+.overviewVerticalCta {
+  margin-top: 10px;
+}
+.opsRestaurantAreaFlow {
+  margin-top: 10px;
+  margin-bottom: 0;
+  max-width: 62ch;
+}
 
 .opsRestaurantCard .cardHead h3 {
   display: inline-flex;
