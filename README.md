@@ -95,21 +95,25 @@ npm run db:seed
 npm run build
 ```
 
-## Git push (GitHub — kullanıcı + token)
+## Git push (GitHub)
 
-GitHub artık hesap şifresi ile HTTPS push kabul etmez; **Personal Access Token (PAT)** kullanın.
+GitHub HTTPS ile hesap şifresi kabul etmez; **PAT** veya **SSH** kullanın.
 
-1. GitHub → **Settings → Developer settings → Personal access tokens** ile token oluşturun (`repo` yetkisi yeterli).
-2. Terminalde (token’ı asla repoya commit etmeyin; komut geçmişine düşebilir):
+**Önerilen (token’ı URL’ye yazmadan):**
 
 ```bash
+# GitHub CLI — tarayıcı ile giriş, sonra push
+gh auth login
 cd /path/to/appointment
-git remote set-url origin https://GITHUB_KULLANICI_ADINIZ:TOKENINIZ@github.com/albayyusuf/appointment.git
 git push origin main
 ```
 
-3. Push bittikten sonra URL’den şifreyi kaldırın (güvenlik):
+**SSH (bir kez anahtar eklediyseniz):**
 
 ```bash
-git remote set-url origin https://github.com/albayyusuf/appointment.git
+git remote set-url origin git@github.com:albayyusuf/appointment.git
+git push origin main
 ```
+
+**HTTPS + PAT:** Token oluşturun (GitHub → Settings → Developer settings → Personal access tokens, `repo`). İlk `git push` sırasında kullanıcı adı + token (şifre yerine) girin; macOS **Keychain** ile saklanır.  
+**Asla** token’ı README’ye, remote URL’ye kalıcı yazmayın ve sızdıysa token’ı GitHub’da **anında iptal** edin.
