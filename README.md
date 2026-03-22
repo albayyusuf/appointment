@@ -99,21 +99,40 @@ npm run build
 
 GitHub HTTPS ile hesap şifresi kabul etmez; **PAT** veya **SSH** kullanın.
 
-**Önerilen (token’ı URL’ye yazmadan):**
+### PAT ile push (terminal — önerilen kullanım)
+
+**Gerçek token’ı bu dosyaya veya `git remote` URL’sine yazmayın** (commit’lenirse herkes görür). PAT: GitHub → **Settings → Developer settings → Personal access tokens** (`repo` yetkisi). Sızdırdıysanız token’ı **hemen iptal** edip yenisini oluşturun.
+
+Tek seferlik push (kullanıcı adı + PAT’yi **sadece terminalde** yapıştırın):
 
 ```bash
-# GitHub CLI — tarayıcı ile giriş, sonra push
+cd /path/to/appointment
+git push https://KULLANICI_ADINIZ:GITHUB_PAT_BURAYA@github.com/albayyusuf/appointment.git main
+```
+
+`origin` tanımlıysa ve branch adı `main` değilse:
+
+```bash
+git push https://KULLANICI_ADINIZ:GITHUB_PAT_BURAYA@github.com/albayyusuf/appointment.git HEAD:main
+```
+
+Push bittikten sonra remote’ta token kalmaması için:
+
+```bash
+git remote set-url origin https://github.com/albayyusuf/appointment.git
+```
+
+### Alternatif: token’ı URL’ye hiç yazmadan
+
+```bash
 gh auth login
 cd /path/to/appointment
 git push origin main
 ```
 
-**SSH (bir kez anahtar eklediyseniz):**
+**SSH:**
 
 ```bash
 git remote set-url origin git@github.com:albayyusuf/appointment.git
 git push origin main
 ```
-
-**HTTPS + PAT:** Token oluşturun (GitHub → Settings → Developer settings → Personal access tokens, `repo`). İlk `git push` sırasında kullanıcı adı + token (şifre yerine) girin; macOS **Keychain** ile saklanır.  
-**Asla** token’ı README’ye, remote URL’ye kalıcı yazmayın ve sızdıysa token’ı GitHub’da **anında iptal** edin.
