@@ -18,7 +18,21 @@ export class TenantContextMiddleware implements NestMiddleware {
       return;
     }
 
-    const tenantId = req.header('x-tenant-id');
+    /** tenantId @Query ile controller'da okunur; middleware'de query güvenilir olmayabilir */
+    if (req.path.startsWith('/guest/branches')) {
+      next();
+      return;
+    }
+
+    const fromHeader = req.header('x-tenant-id');
+    let tenantId = fromHeader?.trim() || undefined;
+    /** Misafir GET’lerde tenantId sorgu parametresi (CORS preflight gerektirmez) */
+    if (!tenantId && req.path.startsWith('/guest/')) {
+      const q = req.query?.tenantId;
+      const fromQuery = typeof q === 'string' ? q : Array.isArray(q) && q[0] ? String(q[0]) : undefined;
+      tenantId = fromQuery?.trim() || undefined;
+    }
+
     if (!tenantId) {
       throw new BadRequestException('Missing x-tenant-id header');
     }

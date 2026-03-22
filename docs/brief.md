@@ -21,6 +21,11 @@ Build a secure, scalable appointment platform that serves both beauty and health
 - Audit logs for critical changes
 - Basic reporting for occupancy, staff load, and revenue indicators
 
+### Restaurant vertical (RESTAURANT)
+- Seating **areas** (e.g. garden, terrace) as bookable resources; guest API maps “staff” slot id to `RestaurantArea`.
+- **Branch pricing days** (`BranchPricingDay`): optional per-date surcharge (% and/or fixed). No rule ⇒ guest pricing hint `hasRule: false` (list price only).
+- Web: public `/reserve` flow; admin **Operations** + **assignment** list shows area name when staff is null.
+
 ## Multi-Tenant and Domain Boundaries
 - Every tenant-scoped entity includes `tenant_id`.
 - Tenant filtering is mandatory at service/repository boundaries.

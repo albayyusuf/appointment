@@ -11,6 +11,8 @@ async function bootstrap() {
     origin: corsOrigins && corsOrigins.length > 0 ? corsOrigins : true,
     credentials: true,
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+    /** Tarayıcı x-tenant-id ile preflight ister; aksi halde şube / misafir istekleri sessizce düşer */
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-tenant-id', 'X-Tenant-Id', 'Accept'],
   });
 
   const swaggerUser = process.env.SWAGGER_USER ?? 'admin';

@@ -88,6 +88,28 @@ body {
   display: grid;
   grid-template-columns: 268px 1fr;
 }
+.layout--gate {
+  grid-template-columns: 1fr;
+}
+.layout--gate .sidebar--gateHidden {
+  display: none;
+}
+.layout--gate .content--fullWhenGate {
+  max-width: 560px;
+  margin: 0 auto;
+  width: 100%;
+}
+.loginGateActions {
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.loginDevQuickBtn {
+  border: 1px dashed color-mix(in srgb, var(--accent) 55%, transparent);
+}
+.loginDevHint {
+  font-size: 0.85rem;
+  margin-top: 8px;
+}
 .publicLayout {
   grid-template-columns: 1fr;
 }
@@ -115,12 +137,13 @@ body {
 .publicHeaderInner {
   max-width: 1200px;
   margin: 0 auto;
-  padding: 12px 18px;
+  padding: 10px 16px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  flex-wrap: wrap;
+  gap: 10px 12px;
+  flex-wrap: nowrap;
+  min-width: 0;
 }
 .publicBrandBtn {
   border: 0;
@@ -129,12 +152,28 @@ body {
   text-align: left;
   font: inherit;
   color: inherit;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: min(100%, 280px);
+}
+.publicBrandBtn > div {
+  min-width: 0;
+}
+.publicBrandBtn h1 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .publicHeaderEnd {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+}
+.publicHeaderEnd .ghostBtn {
+  padding: 6px 10px;
+  font-size: 0.8125rem;
 }
 .publicRolePanel {
   position: relative;
@@ -144,10 +183,12 @@ body {
   cursor: pointer;
   border: 1px solid var(--line);
   border-radius: 10px;
-  padding: 8px 12px;
+  padding: 6px 10px;
+  font-size: 0.8125rem;
   font-weight: 600;
   color: var(--text);
   background: #ffffff;
+  white-space: nowrap;
 }
 .publicRoleSummary::-webkit-details-marker {
   display: none;
@@ -229,12 +270,31 @@ body {
 }
 .publicNav {
   display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 4px;
+  flex-wrap: nowrap;
   align-items: center;
+  justify-content: center;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 2px;
+}
+.publicNav::-webkit-scrollbar {
+  height: 4px;
+}
+.publicNav::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--line) 90%, transparent);
+  border-radius: 4px;
 }
 .publicNav .ghostBtn {
   background: #ffffff;
+  padding: 6px 9px;
+  font-size: 0.8125rem;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .publicNav.isOpen {
   display: flex;
@@ -381,6 +441,47 @@ body {
   text-transform: uppercase;
   color: var(--muted);
 }
+.menuSection--reservation {
+  margin-top: 2px;
+  margin-bottom: 6px;
+  color: color-mix(in srgb, var(--accent) 85%, var(--text));
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+.menuPrimaryItem {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px !important;
+  border-radius: var(--radius-md);
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, transparent) !important;
+  background: linear-gradient(
+    145deg,
+    color-mix(in srgb, var(--accent-soft) 95%, transparent),
+    color-mix(in srgb, var(--card) 55%, transparent)
+  ) !important;
+  color: var(--text) !important;
+  font-weight: 700 !important;
+  font-size: 0.95rem !important;
+  line-height: 1.25;
+}
+.menuPrimaryItem:hover {
+  background: color-mix(in srgb, var(--accent-soft) 100%, transparent) !important;
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent) !important;
+  color: var(--text) !important;
+}
+.menuPrimaryItem.active {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.menuPrimaryItem.active .menuIcon {
+  color: var(--accent);
+}
+.menuPrimaryItemLabel {
+  flex: 1;
+  min-width: 0;
+}
 
 .content {
   padding: 24px 24px 40px;
@@ -404,6 +505,26 @@ body {
 .topbarTitle {
   flex: 1;
   min-width: 180px;
+}
+.topbarCrumb {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: min(100%, 280px);
+  font-size: 0.86rem;
+  font-weight: 600;
+  line-height: 1.35;
+  padding: 6px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@media (max-width: 720px) {
+  .topbarCrumb {
+    flex-basis: 100%;
+    order: 4;
+    max-width: 100%;
+    white-space: normal;
+  }
 }
 .topbar h1 {
   margin: 0;
@@ -747,6 +868,51 @@ tbody tr:last-child td {
   margin-top: 2px;
 }
 
+/* Public header: TR menü öğeleri dar ekranda taşmasın — orta genişlikte hamburger */
+@media (max-width: 1180px) {
+  .publicHeaderInner {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    align-items: center;
+    gap: 8px 10px;
+  }
+  .publicBrandBtn {
+    max-width: none;
+  }
+  .publicNavToggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .publicNav {
+    display: none;
+    grid-column: 1 / -1;
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    width: 100%;
+    gap: 2px;
+    padding-top: 10px;
+    margin-top: 6px;
+    border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+    flex: none;
+  }
+  .publicNav.isOpen {
+    display: flex;
+  }
+  .publicNav .ghostBtn {
+    white-space: normal;
+    text-align: left;
+    justify-content: flex-start;
+    width: 100%;
+    padding: 10px 12px;
+    font-size: 0.9rem;
+  }
+  .publicHeaderEnd {
+    justify-self: end;
+  }
+}
+
 @media (max-width: 980px) {
   .kpiGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .contentGrid { grid-template-columns: 1fr; }
@@ -781,25 +947,6 @@ tbody tr:last-child td {
   .topbarActions .tenantSelect {
     flex: 1;
     min-width: 0;
-  }
-  .publicHeader { flex-direction: column; align-items: flex-start; }
-  .publicNavToggle { display: inline-flex; align-items: center; justify-content: center; margin-left: auto; }
-  .publicNav {
-    display: none;
-    width: 100%;
-    flex-direction: column;
-    align-items: stretch;
-    order: 10;
-  }
-  .publicNav.isOpen {
-    display: flex;
-  }
-  .publicHeaderInner {
-    flex-wrap: wrap;
-  }
-  .publicHeaderEnd {
-    width: 100%;
-    justify-content: flex-end;
   }
   .publicRoleList {
     left: 0;
@@ -888,6 +1035,14 @@ tbody tr:last-child td {
   font-size: 0.82rem;
   color: rgba(226, 232, 240, 0.85);
   letter-spacing: 0.02em;
+}
+.landingSectionCta {
+  display: flex;
+  justify-content: center;
+  margin-top: 28px;
+}
+.landingSectionCta .landingBtn {
+  min-width: min(100%, 320px);
 }
 .landingHeroDots.heroDots {
   bottom: 18px;
@@ -1132,6 +1287,20 @@ tbody tr:last-child td {
   font-size: 1.2rem;
   font-weight: 700;
   color: #0f172a;
+}
+.landingPriceSku {
+  margin: 6px 0 10px;
+  font-size: 0.75rem;
+  color: #64748b;
+}
+.landingPriceSku code {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: rgba(15, 23, 42, 0.06);
+  padding: 3px 8px;
+  border-radius: 6px;
+  color: #475569;
 }
 .landingPaymentPanel {
   margin-top: 36px;
@@ -1533,11 +1702,287 @@ tbody tr:last-child td {
   font-size: 0.95rem;
 }
 
-/* Public reserve — demo & week strip */
-.publicReserve {
-  max-width: 960px;
+.applyShowcaseBadge {
+  display: inline-block;
+  margin: 0 0 10px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #0d9488;
+  background: rgba(13, 148, 136, 0.1);
+  border: 1px solid rgba(13, 148, 136, 0.28);
 }
-.publicReserve .reserveCard,
+
+/* Public header — rezervasyon CTA (her zaman görünür, menü sırasındaki tekrar kaldırıldı) */
+.publicReserveCta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  font-size: 0.875rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  border-radius: 999px;
+  box-shadow: 0 4px 14px rgba(13, 148, 136, 0.35);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.publicReserveCta svg {
+  flex-shrink: 0;
+}
+@media (max-width: 520px) {
+  .publicReserveCta {
+    padding: 8px 12px;
+  }
+  .publicReserveCtaLabel {
+    display: none;
+  }
+}
+
+/* Public reserve — full-bleed page + section cards */
+.reservePageShell {
+  width: 100%;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.reservePageHeroBand {
+  width: 100%;
+  padding: clamp(16px, 3vw, 28px) 0 clamp(16px, 2.5vw, 22px);
+  background:
+    radial-gradient(ellipse 90% 120% at 50% -40%, rgba(13, 148, 136, 0.14), transparent 55%),
+    linear-gradient(180deg, #f8fafc 0%, #f1f5f9 100%);
+  border-bottom: 1px solid rgba(15, 23, 42, 0.06);
+}
+.reservePageInner {
+  width: 100%;
+  max-width: min(1200px, 100%);
+  margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left));
+  padding-right: max(16px, env(safe-area-inset-right));
+}
+.reservePageMain {
+  width: 100%;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.reservePageStickyWrap {
+  width: 100%;
+  background: linear-gradient(180deg, rgba(248, 250, 252, 0.65) 0%, transparent 100%);
+}
+.reservePageStepList {
+  width: 100%;
+  flex: 1;
+  padding-bottom: clamp(24px, 4vw, 48px);
+  background:
+    linear-gradient(180deg, rgba(241, 245, 249, 0.5) 0%, rgba(248, 250, 252, 0.9) 48%, #f1f5f9 100%);
+}
+.reserveHeroTitleGlyph {
+  flex-shrink: 0;
+  color: #0d9488;
+  opacity: 0.95;
+}
+.reserveFlowTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.reserveHero .reserveFlowTitle {
+  font-size: clamp(1.35rem, 2.6vw, 1.6rem);
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: #0f172a;
+  margin: 0 0 10px;
+}
+.reserveHeroTop {
+  margin-bottom: 12px;
+}
+.reserveBackHome {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px 8px 6px;
+  margin: 0 0 4px -6px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: #0d9488;
+  font-size: 0.92rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+.reserveBackHome:hover {
+  background: color-mix(in srgb, #0d9488 12%, transparent);
+  color: #0f766e;
+}
+.reserveBackHome:focus-visible {
+  outline: 2px solid color-mix(in srgb, #0d9488 45%, transparent);
+  outline-offset: 2px;
+}
+
+.reserveSectionCard {
+  position: relative;
+  border-radius: 20px;
+  padding: clamp(18px, 2.8vw, 26px);
+  margin-bottom: 20px;
+  background: #fff;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.8) inset,
+    0 12px 40px rgba(15, 23, 42, 0.07);
+  scroll-margin-top: 108px;
+}
+.reserveSectionCard::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 16px;
+  bottom: 16px;
+  width: 4px;
+  border-radius: 0 4px 4px 0;
+  background: var(--reserve-section-accent, #0d9488);
+}
+.reserveSectionCard--branch {
+  --reserve-section-accent: #0d9488;
+  background: linear-gradient(135deg, #ffffff 0%, color-mix(in srgb, #0d9488 5%, #ffffff) 100%);
+}
+.reserveSectionCard--service {
+  --reserve-section-accent: #6366f1;
+  background: linear-gradient(135deg, #ffffff 0%, color-mix(in srgb, #6366f1 6%, #ffffff) 100%);
+}
+.reserveSectionCard--datetime {
+  --reserve-section-accent: #0ea5e9;
+  background: linear-gradient(135deg, #ffffff 0%, color-mix(in srgb, #0ea5e9 5%, #ffffff) 100%);
+}
+.reserveSectionCard--contact {
+  --reserve-section-accent: #d97706;
+  background: linear-gradient(135deg, #ffffff 0%, color-mix(in srgb, #f59e0b 7%, #ffffff) 100%);
+}
+.reserveSectionCard.reserveBlock {
+  border-bottom: none;
+  padding-bottom: clamp(18px, 2.8vw, 26px);
+}
+.reserveBlockIcon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  flex-shrink: 0;
+  font-size: 0;
+  color: #0f172a;
+  background: rgba(255, 255, 255, 0.82);
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.06);
+}
+.reserveBlockIcon--branch {
+  color: #0f766e;
+  background: color-mix(in srgb, #0d9488 12%, #ffffff);
+  border-color: color-mix(in srgb, #0d9488 28%, transparent);
+}
+.reserveBlockIcon--service {
+  color: #4f46e5;
+  background: color-mix(in srgb, #6366f1 12%, #ffffff);
+  border-color: color-mix(in srgb, #6366f1 28%, transparent);
+}
+.reserveBlockIcon--datetime {
+  color: #0284c7;
+  background: color-mix(in srgb, #0ea5e9 12%, #ffffff);
+  border-color: color-mix(in srgb, #0ea5e9 28%, transparent);
+}
+.reserveBlockIcon--contact {
+  color: #b45309;
+  background: color-mix(in srgb, #f59e0b 14%, #ffffff);
+  border-color: color-mix(in srgb, #f59e0b 30%, transparent);
+}
+.reserveServiceCardIcon {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  margin-bottom: 4px;
+  border-radius: 10px;
+  color: #4f46e5;
+  background: color-mix(in srgb, #6366f1 12%, #ffffff);
+  border: 1px solid color-mix(in srgb, #6366f1 22%, transparent);
+}
+.reserveServiceCard.isSelected .reserveServiceCardIcon {
+  color: #312e81;
+  background: color-mix(in srgb, #6366f1 22%, #ffffff);
+  border-color: color-mix(in srgb, #6366f1 45%, transparent);
+}
+
+.reserveSubCard {
+  padding: 16px 16px 18px;
+  margin-bottom: 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(248, 250, 252, 0.85);
+  box-shadow: 0 4px 20px rgba(15, 23, 42, 0.04);
+}
+.reserveSubCard:last-child {
+  margin-bottom: 0;
+}
+.reserveSubCardHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  font-size: 0.82rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #475569;
+}
+.reserveSubCardHead svg {
+  flex-shrink: 0;
+  color: #0d9488;
+  opacity: 0.95;
+}
+.reserveSubCard--staff .reserveSubCardHead svg {
+  color: #6366f1;
+}
+.reserveSubCard--slots {
+  padding-top: 20px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95) 0%, rgba(248, 250, 252, 0.9) 100%);
+  border-color: color-mix(in srgb, var(--accent) 22%, transparent);
+}
+.reserveSubCard--slots .reserveSlotPanel {
+  border: none;
+  background: transparent;
+  padding: 0;
+  box-shadow: none;
+}
+
+.reserveFormCenter {
+  width: 100%;
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 8px 10px 0;
+}
+.reserveLabel--icon .reserveLabelText {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: #0f172a;
+}
+.reserveLabel--icon .reserveLabelText svg {
+  flex-shrink: 0;
+  color: #0d9488;
+  opacity: 0.9;
+}
+
+.publicReserve {
+  max-width: 1120px;
+  width: 100%;
+}
 .publicApply .applyFlow {
   border-radius: var(--radius-xl);
   border: 1px solid rgba(15, 23, 42, 0.08);
@@ -1575,17 +2020,26 @@ tbody tr:last-child td {
 }
 .reserveWeekStrip {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-wrap: nowrap;
+  gap: 10px;
   margin-bottom: 18px;
+  overflow-x: auto;
+  padding: 4px 2px 10px;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity;
+  scrollbar-width: thin;
 }
 .reserveWeekDay {
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 4px;
-  min-width: 52px;
-  padding: 10px 8px;
+  flex: 0 0 auto;
+  scroll-snap-align: start;
+  min-width: 56px;
+  min-height: 56px;
+  padding: 12px 10px;
   border-radius: 12px;
   border: 1px solid rgba(15, 23, 42, 0.12);
   background: #fff;
@@ -1593,6 +2047,7 @@ tbody tr:last-child td {
   font: inherit;
   color: var(--text);
   transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+  touch-action: manipulation;
 }
 .reserveWeekDay:hover {
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
@@ -1648,9 +2103,57 @@ tbody tr:last-child td {
 .reserveFlow {
   scroll-margin-top: 72px;
 }
-.reserveFlowTitle {
-  margin: 0 0 8px;
-  font-size: 1.35rem;
+.reserveStickyBar {
+  position: sticky;
+  top: calc(env(safe-area-inset-top) + 52px);
+  z-index: 25;
+  margin: 0 0 14px;
+  padding: 10px 10px 12px;
+  border-radius: 16px;
+  background: color-mix(in srgb, #fff 86%, transparent);
+  backdrop-filter: blur(14px) saturate(1.25);
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+  box-shadow: 0 10px 32px rgba(15, 23, 42, 0.07);
+}
+.reserveStickyBar--compact {
+  margin-bottom: 10px;
+  padding: 8px 6px 10px;
+  top: 0;
+  border-radius: 12px;
+  box-shadow: none;
+  background: color-mix(in srgb, var(--card) 94%, transparent);
+}
+.reserveFlow--panel .reserveStickyBar--compact {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+.reserveStickyBar .reserveStepper {
+  margin-bottom: 0;
+  padding-bottom: 12px;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 65%, transparent);
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  gap: 10px;
+  scrollbar-width: thin;
+  -webkit-overflow-scrolling: touch;
+  scroll-snap-type: x proximity;
+  mask-image: linear-gradient(90deg, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
+}
+.reserveStickyBar .reserveLiveSummary {
+  margin: 12px 0 0;
+  padding: 12px 12px;
+  border-radius: 12px;
+}
+.reserveUxTip {
+  margin: 0 0 18px;
+  padding: 0 4px;
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+.reserveTenantSelect {
+  font-size: 1rem !important;
+  min-height: 48px;
 }
 .reserveFlowLead {
   margin: 0 0 6px;
@@ -1674,11 +2177,16 @@ tbody tr:last-child td {
   padding-bottom: 16px;
   border-bottom: 1px solid var(--line);
 }
+.reserveFlow--panel .reserveStepper {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+}
 .reserveStepPill {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 12px;
+  padding: 10px 14px;
   border-radius: 999px;
   border: 1px solid var(--line);
   background: transparent;
@@ -1687,6 +2195,16 @@ tbody tr:last-child td {
   font-size: 0.82rem;
   cursor: pointer;
   transition: border-color 0.15s, background 0.15s, color 0.15s;
+  min-height: 44px;
+  touch-action: manipulation;
+}
+.reserveStickyBar .reserveStepPill {
+  flex-shrink: 0;
+  scroll-snap-align: start;
+}
+.reserveStepPill:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 65%, transparent);
+  outline-offset: 2px;
 }
 .reserveStepPill.isReached {
   border-color: color-mix(in srgb, var(--accent) 40%, transparent);
@@ -1717,6 +2235,7 @@ tbody tr:last-child td {
   margin-bottom: 28px;
   padding-bottom: 24px;
   border-bottom: 1px solid var(--line);
+  scroll-margin-top: 108px;
 }
 .reserveBlock:last-of-type {
   border-bottom: none;
@@ -1724,7 +2243,8 @@ tbody tr:last-child td {
 .reserveBlockTitle {
   display: flex;
   align-items: center;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 10px 12px;
   margin: 0 0 14px;
   font-size: 1.05rem;
   font-weight: 700;
@@ -1773,15 +2293,15 @@ tbody tr:last-child td {
 
 .reserveBranchGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr));
+  gap: 12px;
 }
 .reserveBranchCard {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 6px;
-  padding: 14px 12px;
+  padding: 16px 14px;
   border-radius: 14px;
   border: 1px solid var(--line);
   background: var(--card);
@@ -1789,8 +2309,12 @@ tbody tr:last-child td {
   text-align: left;
   font: inherit;
   color: var(--text);
-  min-height: 88px;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  min-height: 96px;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s;
+  touch-action: manipulation;
+}
+.reserveBranchCard:active:not(:disabled) {
+  transform: scale(0.99);
 }
 .reserveBranchCard:hover {
   border-color: color-mix(in srgb, var(--accent) 35%, transparent);
@@ -1807,19 +2331,40 @@ tbody tr:last-child td {
   font-size: 0.75rem;
   color: var(--muted);
   font-family: ui-monospace, monospace;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.reserveBranchHqBadge {
+  display: inline-block;
+  padding: 2px 7px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  color: color-mix(in srgb, var(--accent) 85%, var(--text));
+  font-family: var(--font-ui);
+}
+.reserveBranchEmpty {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 0.75rem 0;
 }
 
 .reserveServiceGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr));
+  gap: 12px;
 }
 .reserveServiceCard {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   gap: 4px;
-  padding: 14px;
+  padding: 16px 14px;
   border-radius: 14px;
   border: 1px solid var(--line);
   background: var(--card);
@@ -1827,8 +2372,12 @@ tbody tr:last-child td {
   text-align: left;
   font: inherit;
   color: var(--text);
-  min-height: 96px;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  min-height: 104px;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.1s;
+  touch-action: manipulation;
+}
+.reserveServiceCard:active {
+  transform: scale(0.99);
 }
 .reserveServiceCard:hover {
   border-color: color-mix(in srgb, var(--accent) 35%, transparent);
@@ -1892,15 +2441,16 @@ tbody tr:last-child td {
   margin-bottom: 18px;
 }
 .reserveStaffChip {
-  padding: 10px 14px;
+  padding: 12px 16px;
   border-radius: 999px;
   border: 1px solid var(--line);
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 0.86rem;
+  font-size: 0.88rem;
   cursor: pointer;
-  min-height: 44px;
+  min-height: 48px;
+  touch-action: manipulation;
 }
 .reserveStaffChip:disabled {
   opacity: 0.45;
@@ -2032,8 +2582,8 @@ tbody tr:last-child td {
 }
 .reserveSlotGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(108px, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 118px), 1fr));
+  gap: 10px;
 }
 .reserveSlotChip {
   display: flex;
@@ -2041,8 +2591,8 @@ tbody tr:last-child td {
   align-items: center;
   justify-content: center;
   gap: 4px;
-  min-height: 64px;
-  padding: 10px 8px;
+  min-height: 72px;
+  padding: 12px 10px;
   border-radius: 12px;
   border: 1px solid var(--line);
   background: var(--card);
@@ -2050,6 +2600,7 @@ tbody tr:last-child td {
   font: inherit;
   cursor: pointer;
   transition: border-color 0.15s, transform 0.12s;
+  touch-action: manipulation;
 }
 .reserveSlotChip:hover {
   border-color: color-mix(in srgb, var(--accent) 50%, transparent);
@@ -2069,6 +2620,215 @@ tbody tr:last-child td {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.reserveSlotChip.isSelected {
+  border-color: color-mix(in srgb, var(--accent) 70%, transparent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  box-shadow: 0 4px 16px rgba(15, 118, 110, 0.18);
+}
+
+.reserveHero {
+  margin-bottom: 4px;
+}
+.reserveHeroLead {
+  margin: 0 0 14px;
+  font-size: 0.95rem;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.reserveLiveSummary {
+  margin: 0 0 22px;
+  padding: 14px 16px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 9%, #fff), #fff);
+}
+.reserveLiveSummaryHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.reserveLiveSummaryTitle {
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #0f766e;
+}
+.reserveLiveSummaryTenant {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text);
+}
+.reserveLiveSummaryGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px 16px;
+}
+.reserveLiveSummaryCell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.reserveLiveSummaryLbl {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--muted);
+}
+.reserveLiveSummaryVal {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.35;
+  word-break: break-word;
+}
+
+.reserveStaffDetails {
+  margin: 16px 0 18px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px dashed rgba(148, 163, 184, 0.45);
+  background: rgba(248, 250, 252, 0.65);
+}
+.reserveStaffDetailsSummary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--text);
+  list-style: none;
+}
+.reserveStaffDetailsSummary::-webkit-details-marker {
+  display: none;
+}
+.reserveStaffDetails[open] .reserveStaffDetailsSummary {
+  margin-bottom: 10px;
+}
+
+.reservePickSlotHint {
+  margin: 0 0 14px;
+  font-size: 0.86rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.reserveRequestBlock {
+  padding: 20px 18px 22px;
+  border-radius: 16px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  background: color-mix(in srgb, var(--accent) 6%, #fff);
+  scroll-margin-top: 88px;
+}
+.reserveSectionCard.reserveRequestBlock {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  background: linear-gradient(135deg, #ffffff 0%, color-mix(in srgb, #f59e0b 7%, #ffffff) 100%);
+}
+.reserveSectionCard .reserveRequestSummary {
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(15, 23, 42, 0.06);
+}
+.reserveRequestSummary {
+  margin-bottom: 18px;
+}
+.reserveRequestSummaryTitle {
+  margin: 0 0 10px;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #0f766e;
+}
+.reserveRequestSummaryList {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.reserveRequestSummaryList li {
+  display: grid;
+  grid-template-columns: minmax(100px, 140px) 1fr;
+  gap: 10px 14px;
+  align-items: start;
+  font-size: 0.88rem;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.reserveRequestSummaryList li:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+.reserveRequestSummaryKey {
+  color: var(--muted);
+  font-weight: 600;
+}
+.reserveRequestSummaryVal {
+  color: var(--text);
+  font-weight: 600;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.reserveContactSectionLabel {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.reserveSubmitBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  margin-top: 16px;
+  padding: 14px 18px;
+  border: none;
+  border-radius: 12px;
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  color: #fff;
+  background: linear-gradient(135deg, #0d9488, #0f766e);
+  box-shadow: 0 8px 24px rgba(15, 118, 110, 0.28);
+  transition: transform 0.12s, box-shadow 0.12s, opacity 0.15s;
+}
+.reserveSubmitBtn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 28px rgba(15, 118, 110, 0.34);
+}
+.reserveSubmitBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+.reserveSubmitHint {
+  margin: 10px 0 0;
+  font-size: 0.86rem;
+  text-align: center;
+}
+
+.reserveNotifyDetails {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.reserveNotifyDetails summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.88rem;
+  color: var(--muted);
+  margin-bottom: 10px;
 }
 
 .reserveContactGrid {
@@ -2106,18 +2866,62 @@ tbody tr:last-child td {
 }
 
 @media (max-width: 640px) {
+  .publicContent {
+    padding-left: max(12px, env(safe-area-inset-left));
+    padding-right: max(12px, env(safe-area-inset-right));
+  }
+  .reserveHeroLead {
+    font-size: 0.9rem;
+  }
+  .reserveSlotsAutoHint {
+    font-size: 0.84rem;
+    padding: 8px 10px;
+  }
+  .reserveStickyBar {
+    top: calc(env(safe-area-inset-top) + 48px);
+    margin-left: -10px;
+    margin-right: -10px;
+    padding-left: max(8px, env(safe-area-inset-left));
+    padding-right: max(8px, env(safe-area-inset-right));
+  }
   .reserveStepper {
     flex-direction: column;
+    align-items: stretch;
+  }
+  .reserveStickyBar .reserveStepper {
+    flex-direction: row;
     align-items: stretch;
   }
   .reserveStepPill {
     justify-content: flex-start;
   }
+  .reserveLiveSummaryGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px 12px;
+  }
+  .reserveBlock {
+    scroll-margin-top: 128px;
+  }
+  .reserveBranchGrid,
+  .reserveServiceGrid {
+    grid-template-columns: 1fr;
+  }
   .reserveNotifCard {
     grid-template-columns: 1fr;
   }
   .reserveSlotGrid {
-    grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  }
+  .reserveRequestSummaryList li {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reserveBranchCard:active:not(:disabled),
+  .reserveServiceCard:active,
+  .reserveSlotChip:hover {
+    transform: none;
   }
 }
 
@@ -2250,6 +3054,9 @@ tbody tr:last-child td {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
+.applyVerticalGrid--3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
 .applyVerticalCard {
   display: inline-flex;
   align-items: center;
@@ -2368,6 +3175,19 @@ tbody tr:last-child td {
 .applyPlanName {
   margin: 28px 0 0;
   font-size: 1.15rem;
+}
+.applyPlanSku {
+  margin: 6px 0 0;
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+.applyPlanSku code {
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: rgba(15, 23, 42, 0.06);
+  padding: 2px 6px;
+  border-radius: 5px;
 }
 .applyPlanDesc {
   margin: 0;
@@ -2594,6 +3414,11 @@ tbody tr:last-child td {
   font-weight: 600;
 }
 
+@media (max-width: 900px) {
+  .applyVerticalGrid--3 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 @media (max-width: 640px) {
   .applyVerticalGrid {
     grid-template-columns: 1fr;
@@ -2601,4 +3426,204 @@ tbody tr:last-child td {
   .applyPlanGrid {
     grid-template-columns: 1fr;
   }
+}
+
+/* Role-based overview & billing */
+.overviewPageLead {
+  margin: 0 0 16px;
+  max-width: 52rem;
+  line-height: 1.5;
+}
+.billingSubSummary {
+  margin: 12px 0 20px;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.planLimitsGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 24px;
+  margin-top: 12px;
+  font-size: 0.9rem;
+}
+.billingProviderRef {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.72rem;
+  word-break: break-all;
+  opacity: 0.85;
+}
+.billingPlatformActions {
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+.billingSelectLabel {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 0.85rem;
+  min-width: min(100%, 280px);
+}
+.billingSelectLabel select {
+  min-height: 40px;
+}
+.billingTenantPayRow {
+  margin-top: 12px;
+}
+.billingPaymentsHead {
+  margin: 24px 0 10px;
+  font-size: 1rem;
+}
+.billingHint {
+  margin-top: 12px;
+  line-height: 1.45;
+}
+.overviewGuestCta {
+  margin-top: 20px;
+}
+.overviewGuestCta .landingBtn {
+  margin-top: 12px;
+}
+
+/* Dashboard — restoran şeridi, operasyon fiyat kartı, abonelik yenileme */
+.overviewVerticalBanner {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px 16px;
+  margin: 0 0 18px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 10%, transparent), color-mix(in srgb, var(--accent) 4%, transparent));
+}
+.overviewVerticalBanner--restaurant .overviewVerticalBannerIcon {
+  flex-shrink: 0;
+  color: #0d9488;
+  margin-top: 2px;
+}
+.overviewVerticalBannerTitle {
+  display: block;
+  font-size: 0.95rem;
+  margin-bottom: 4px;
+}
+.overviewVerticalBannerDesc {
+  margin: 0;
+  font-size: 0.86rem;
+  max-width: 52ch;
+}
+
+.opsRestaurantCard .cardHead h3 {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0;
+}
+.opsRestaurantTitleIcon {
+  color: #0d9488;
+  flex-shrink: 0;
+}
+.opsRestaurantFreePaid {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 0.88rem;
+  line-height: 1.5;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  color: var(--muted);
+}
+.demoPricingBanner {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, transparent);
+  background: color-mix(in srgb, var(--accent) 5%, var(--card));
+}
+.demoPricingDateCode {
+  font-size: 0.95rem;
+  padding: 2px 8px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.billingRenewalCard {
+  margin: 16px 0 0;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, #0d9488 35%, transparent);
+  background: linear-gradient(180deg, color-mix(in srgb, #0d9488 8%, transparent), transparent);
+}
+.billingRenewalTitle {
+  margin: 0 0 6px;
+  font-size: 0.95rem;
+}
+.billingRenewalLead {
+  margin: 0 0 12px;
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+.billingRenewalGrid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 28px;
+}
+.billingRenewalItem {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 140px;
+}
+.billingRenewalItem .muted {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.billingRenewalItem strong {
+  font-size: 1.05rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.ledgerEmptyCell {
+  padding: 20px 16px !important;
+  text-align: center;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+/* App toast — panel bildirimleri */
+.appToast {
+  margin: 0 0 16px;
+  padding: 12px 16px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--card));
+  color: var(--text);
+  font-size: 0.9rem;
+  line-height: 1.45;
+  box-shadow: var(--shadow-sm);
+}
+.appToast--public {
+  margin: 0;
+  max-width: min(100%, 720px);
+}
+.restaurantPricingRulesSection {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.restaurantPricingRulesToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.restaurantPricingRulesTitle {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
 }

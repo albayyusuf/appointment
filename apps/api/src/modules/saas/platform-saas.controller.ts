@@ -9,6 +9,7 @@ type CreatePlanBody = {
   sortOrder?: number;
   badgeLabel?: string | null;
   stripePriceId?: string | null;
+  stripeProductId?: string | null;
   featureLines?: unknown;
   priceAmount: number;
   currency?: string;

@@ -1,7 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { BillingInterval, PaymentStatus, Prisma, SubscriptionStatus, UserStatus, VerticalType } from '@prisma/client';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BillingInterval, PaymentStatus, Plan, Prisma, SubscriptionStatus, UserStatus, VerticalType } from '@prisma/client';
+import * as bcrypt from 'bcrypt';
 import Stripe from 'stripe';
 import { PrismaService } from '../prisma/prisma.service';
+
+const BCRYPT_ROUNDS = 10;
 
 export type CreatePlanInput = {
   code: string;
@@ -10,6 +13,7 @@ export type CreatePlanInput = {
   sortOrder?: number;
   badgeLabel?: string | null;
   stripePriceId?: string | null;
+  stripeProductId?: string | null;
   featureLines?: unknown;
   priceAmount: number;
   currency?: string;
@@ -26,6 +30,51 @@ export type UpdatePlanInput = Partial<CreatePlanInput>;
 @Injectable()
 export class SaasService {
   constructor(private readonly prisma: PrismaService) {}
+
+  /**
+   * Checkout için Stripe Price ID: önce plan.stripePriceId, yoksa ürün altındaki
+   * recurring fiyatlarından plan.interval ile eşleşen (ay/yıl) seçilir.
+   */
+  private async resolveStripePriceIdForCheckout(plan: Plan): Promise<string | null> {
+    const direct = plan.stripePriceId?.trim();
+    if (direct) {
+      return direct;
+    }
+    const productId = plan.stripeProductId?.trim();
+    const secret = process.env.STRIPE_SECRET_KEY;
+    if (!secret || !productId) {
+      return null;
+    }
+    try {
+      const stripe = new Stripe(secret);
+      const prices = await stripe.prices.list({
+        product: productId,
+        active: true,
+        limit: 100,
+      });
+      const wantMonth = plan.interval === BillingInterval.MONTHLY;
+      const wantYear = plan.interval === BillingInterval.YEARLY;
+      for (const pr of prices.data) {
+        if (pr.type !== 'recurring' || !pr.recurring) continue;
+        if (wantMonth && pr.recurring.interval === 'month') return pr.id;
+        if (wantYear && pr.recurring.interval === 'year') return pr.id;
+      }
+      const firstRec = prices.data.find((pr) => pr.type === 'recurring');
+      return firstRec?.id ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private computeNextBilling(interval: BillingInterval, from: Date): Date {
+    const d = new Date(from);
+    if (interval === BillingInterval.YEARLY) {
+      d.setFullYear(d.getFullYear() + 1);
+    } else {
+      d.setMonth(d.getMonth() + 1);
+    }
+    return d;
+  }
 
   listPlans() {
     return this.prisma.plan.findMany({
@@ -49,6 +98,7 @@ export class SaasService {
         sortOrder: input.sortOrder ?? 0,
         badgeLabel: input.badgeLabel,
         stripePriceId: input.stripePriceId,
+        stripeProductId: input.stripeProductId,
         featureLines: input.featureLines === undefined ? undefined : (input.featureLines as Prisma.InputJsonValue),
         priceAmount: new Prisma.Decimal(input.priceAmount),
         currency: (input.currency ?? 'TRY').toUpperCase(),
@@ -69,6 +119,7 @@ export class SaasService {
     if (input.sortOrder !== undefined) data.sortOrder = input.sortOrder;
     if (input.badgeLabel !== undefined) data.badgeLabel = input.badgeLabel;
     if (input.stripePriceId !== undefined) data.stripePriceId = input.stripePriceId;
+    if (input.stripeProductId !== undefined) data.stripeProductId = input.stripeProductId;
     if (input.featureLines !== undefined) data.featureLines = input.featureLines as Prisma.InputJsonValue;
     if (input.priceAmount !== undefined) data.priceAmount = new Prisma.Decimal(input.priceAmount);
     if (input.currency !== undefined) data.currency = input.currency.toUpperCase();
@@ -139,10 +190,27 @@ export class SaasService {
 
   /**
    * Stripe Checkout — STRIPE_SECRET_KEY ve plan.stripePriceId gerekir.
+   * `subscriptionId`: başvuru sonrası oluşan aboneliği ödeme ile eşlemek için zorunlu.
    */
-  async createStripeCheckoutSession(body: { planCode: string; successUrl: string; cancelUrl: string; customerEmail?: string }) {
-    const plan = await this.prisma.plan.findUnique({ where: { code: body.planCode } });
-    if (!plan || !plan.isActive) {
+  async createStripeCheckoutSession(body: {
+    planCode: string;
+    subscriptionId: string;
+    successUrl: string;
+    cancelUrl: string;
+    customerEmail?: string;
+  }) {
+    const subscription = await this.prisma.subscription.findUnique({
+      where: { id: body.subscriptionId },
+      include: { plan: true },
+    });
+    if (!subscription) {
+      throw new NotFoundException('Subscription not found');
+    }
+    if (subscription.plan.code !== body.planCode) {
+      throw new BadRequestException('Plan does not match subscription');
+    }
+    const plan = subscription.plan;
+    if (!plan.isActive) {
       throw new NotFoundException('Plan not found');
     }
     const secret = process.env.STRIPE_SECRET_KEY;
@@ -154,11 +222,13 @@ export class SaasService {
         planCode: plan.code,
       };
     }
-    if (!plan.stripePriceId) {
+    const priceId = await this.resolveStripePriceIdForCheckout(plan);
+    if (!priceId) {
       return {
         ok: false as const,
         configured: true,
-        message: 'This plan has no stripePriceId. Set it in platform plan admin.',
+        message:
+          'No Stripe price: set stripePriceId (price_...) or stripeProductId (prod_...) on the plan in Super admin → Plans.',
         planCode: plan.code,
       };
     }
@@ -169,13 +239,74 @@ export class SaasService {
         success_url: body.successUrl,
         cancel_url: body.cancelUrl,
         customer_email: body.customerEmail,
-        line_items: [{ price: plan.stripePriceId, quantity: 1 }],
+        line_items: [{ price: priceId, quantity: 1 }],
+        metadata: {
+          subscriptionId: subscription.id,
+          tenantId: subscription.tenantId,
+        },
       });
       return { ok: true as const, configured: true, url: session.url };
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Stripe error';
       return { ok: false as const, configured: true, message: msg };
     }
+  }
+
+  /**
+   * Stripe Checkout dönüşü — session_id ile ödemeyi doğrular, aboneliği aktifleştirir.
+   */
+  async completeStripeCheckoutSession(sessionId: string) {
+    const secret = process.env.STRIPE_SECRET_KEY;
+    if (!secret) {
+      throw new BadRequestException('Stripe not configured');
+    }
+    const stripe = new Stripe(secret);
+    const session = await stripe.checkout.sessions.retrieve(sessionId);
+    const subscriptionId = session.metadata?.subscriptionId;
+    if (!subscriptionId) {
+      throw new BadRequestException('Checkout session missing subscription metadata');
+    }
+    if (session.status !== 'complete') {
+      throw new BadRequestException('Checkout session not complete');
+    }
+
+    const existing = await this.prisma.payment.findFirst({
+      where: { provider: 'stripe', providerRef: session.id },
+    });
+    if (existing) {
+      return { ok: true as const, paymentId: existing.id, alreadyProcessed: true as const };
+    }
+
+    const subscription = await this.prisma.subscription.findUnique({
+      where: { id: subscriptionId },
+      include: { plan: true },
+    });
+    if (!subscription) {
+      throw new NotFoundException('Subscription not found');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const payment = await tx.payment.create({
+        data: {
+          subscriptionId,
+          amount: subscription.plan.priceAmount,
+          currency: subscription.plan.currency,
+          status: PaymentStatus.PAID,
+          provider: 'stripe',
+          providerRef: session.id,
+          paidAt: new Date(),
+        },
+      });
+      await tx.subscription.update({
+        where: { id: subscriptionId },
+        data: {
+          status: SubscriptionStatus.ACTIVE,
+          trialEndsAt: null,
+          nextBillingAt: this.computeNextBilling(subscription.plan.interval, new Date()),
+        },
+      });
+      return { ok: true as const, paymentId: payment.id, alreadyProcessed: false as const };
+    });
   }
 
   async subscribeTenant(tenantSlug: string, planCode: string) {
@@ -206,12 +337,21 @@ export class SaasService {
     slug: string;
     vertical: VerticalType;
     defaultCurrency: string;
+    companyPhone?: string;
     adminFullName: string;
     adminEmail: string;
+    adminPassword: string;
     planCode: string;
     notes?: string;
     applicationKind?: 'company' | 'franchise';
   }) {
+    const pwd = input.adminPassword?.trim() ?? '';
+    if (pwd.length < 8) {
+      throw new BadRequestException('Password must be at least 8 characters');
+    }
+    const phoneRaw = input.companyPhone?.trim();
+    const phone = phoneRaw && phoneRaw.length > 0 ? phoneRaw : undefined;
+    const passwordHash = await bcrypt.hash(pwd, BCRYPT_ROUNDS);
     const plan = await this.prisma.plan.findUnique({ where: { code: input.planCode } });
     if (!plan) {
       throw new NotFoundException('Plan not found');
@@ -222,6 +362,7 @@ export class SaasService {
         data: {
           name: input.companyName,
           slug: input.slug,
+          phone,
           vertical: input.vertical,
           defaultCurrency: input.defaultCurrency.toUpperCase(),
         },
@@ -248,7 +389,7 @@ export class SaasService {
           branchId: branch.id,
           email: input.adminEmail.toLowerCase(),
           fullName: input.adminFullName,
-          passwordHash: 'TEMP_SETUP_REQUIRED',
+          passwordHash,
           status: UserStatus.ACTIVE,
           isStaff: false,
         },
@@ -274,6 +415,7 @@ export class SaasService {
         planCode: input.planCode,
         notes: input.notes?.trim() || undefined,
         adminEmail: input.adminEmail.toLowerCase(),
+        companyPhone: phone,
       };
       await tx.auditLog.create({
         data: {
@@ -290,24 +432,50 @@ export class SaasService {
   }
 
   async mockPay(subscriptionId: string) {
-    const subscription = await this.prisma.subscription.findUnique({
-      where: { id: subscriptionId },
-      include: { plan: true },
-    });
-    if (!subscription) {
-      throw new NotFoundException('Subscription not found');
-    }
+    return this.prisma.$transaction(async (tx) => {
+      const subscription = await tx.subscription.findUnique({
+        where: { id: subscriptionId },
+        include: { plan: true },
+      });
+      if (!subscription) {
+        throw new NotFoundException('Subscription not found');
+      }
 
-    return this.prisma.payment.create({
-      data: {
-        subscriptionId,
-        amount: subscription.plan.priceAmount,
-        currency: subscription.plan.currency,
-        status: PaymentStatus.PAID,
-        provider: 'mock-gateway',
-        providerRef: `MOCK-${Date.now()}`,
-        paidAt: new Date(),
-      },
+      const existingPaid = await tx.payment.findFirst({
+        where: { subscriptionId, status: PaymentStatus.PAID },
+      });
+      if (existingPaid) {
+        await tx.subscription.update({
+          where: { id: subscriptionId },
+          data: {
+            status: SubscriptionStatus.ACTIVE,
+            trialEndsAt: null,
+            nextBillingAt: this.computeNextBilling(subscription.plan.interval, new Date()),
+          },
+        });
+        return existingPaid;
+      }
+
+      const payment = await tx.payment.create({
+        data: {
+          subscriptionId,
+          amount: subscription.plan.priceAmount,
+          currency: subscription.plan.currency,
+          status: PaymentStatus.PAID,
+          provider: 'mock-gateway',
+          providerRef: `MOCK-${Date.now()}`,
+          paidAt: new Date(),
+        },
+      });
+      await tx.subscription.update({
+        where: { id: subscriptionId },
+        data: {
+          status: SubscriptionStatus.ACTIVE,
+          trialEndsAt: null,
+          nextBillingAt: this.computeNextBilling(subscription.plan.interval, new Date()),
+        },
+      });
+      return payment;
     });
   }
 
@@ -361,7 +529,7 @@ export class SaasService {
   recentPayments() {
     return this.prisma.payment.findMany({
       orderBy: { createdAt: 'desc' },
-      take: 20,
+      take: 50,
       include: {
         subscription: {
           include: {
@@ -371,6 +539,125 @@ export class SaasService {
         },
       },
     });
+  }
+
+  /** Kiracı paneli: abonelik, ödeme geçmişi, platform banka bilgisi (tahsilat) */
+  async tenantBillingDashboard(tenantSlug: string) {
+    const tenant = await this.prisma.tenant.findUnique({
+      where: { slug: tenantSlug },
+      include: {
+        subscriptions: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          include: {
+            plan: true,
+            payments: {
+              orderBy: { createdAt: 'desc' },
+              take: 50,
+            },
+          },
+        },
+      },
+    });
+    if (!tenant) {
+      throw new NotFoundException('Tenant not found');
+    }
+    const sub = tenant.subscriptions[0];
+    const banks = await this.listBankAccounts(false);
+    return {
+      tenant: {
+        id: tenant.id,
+        name: tenant.name,
+        slug: tenant.slug,
+        vertical: tenant.vertical,
+        defaultCurrency: tenant.defaultCurrency,
+      },
+      subscription: sub
+        ? {
+            id: sub.id,
+            status: sub.status,
+            startsAt: sub.startsAt,
+            endsAt: sub.endsAt,
+            trialEndsAt: sub.trialEndsAt,
+            nextBillingAt: sub.nextBillingAt,
+            cancelAtPeriodEnd: sub.cancelAtPeriodEnd,
+            plan: {
+              code: sub.plan.code,
+              name: sub.plan.name,
+              description: sub.plan.description,
+              priceAmount: sub.plan.priceAmount,
+              currency: sub.plan.currency,
+              interval: sub.plan.interval,
+              maxBranches: sub.plan.maxBranches,
+              maxStaff: sub.plan.maxStaff,
+              maxAppointmentsMo: sub.plan.maxAppointmentsMo,
+              trialDays: sub.plan.trialDays,
+              stripePriceId: sub.plan.stripePriceId,
+            },
+            payments: sub.payments.map((p) => ({
+              id: p.id,
+              amount: p.amount,
+              currency: p.currency,
+              status: p.status,
+              provider: p.provider,
+              providerRef: p.providerRef,
+              paidAt: p.paidAt,
+              createdAt: p.createdAt,
+            })),
+          }
+        : null,
+      bankAccounts: banks,
+    };
+  }
+
+  /** Kiracı özeti: operasyon + abonelik özeti (rol bazlı dashboard) */
+  async tenantOverviewStats(tenantSlug: string) {
+    const tenant = await this.prisma.tenant.findUnique({ where: { slug: tenantSlug } });
+    if (!tenant) {
+      throw new NotFoundException('Tenant not found');
+    }
+    const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const [branchCount, staffCount, appt7d, apptTotal, ledgerSum, sub] = await Promise.all([
+      this.prisma.branch.count({ where: { tenantId: tenant.id, deletedAt: null } }),
+      this.prisma.staffProfile.count({ where: { tenantId: tenant.id } }),
+      this.prisma.appointment.count({ where: { tenantId: tenant.id, createdAt: { gte: since } } }),
+      this.prisma.appointment.count({ where: { tenantId: tenant.id } }),
+      this.prisma.ledgerEntry.aggregate({
+        where: { tenantId: tenant.id, type: 'INCOME' },
+        _sum: { amount: true },
+      }),
+      this.prisma.subscription.findFirst({
+        where: { tenantId: tenant.id },
+        orderBy: { createdAt: 'desc' },
+        include: { plan: true },
+      }),
+    ]);
+
+    return {
+      tenant: {
+        name: tenant.name,
+        slug: tenant.slug,
+        vertical: tenant.vertical,
+        defaultCurrency: tenant.defaultCurrency,
+      },
+      metrics: {
+        branches: branchCount,
+        staff: staffCount,
+        appointmentsLast7Days: appt7d,
+        appointmentsTotal: apptTotal,
+        serviceIncomeTotal: ledgerSum._sum.amount ?? 0,
+      },
+      subscription: sub
+        ? {
+            id: sub.id,
+            status: sub.status,
+            planName: sub.plan.name,
+            planCode: sub.plan.code,
+            nextBillingAt: sub.nextBillingAt,
+            trialEndsAt: sub.trialEndsAt,
+          }
+        : null,
+    };
   }
 
   async checkoutContext(tenantSlug: string) {

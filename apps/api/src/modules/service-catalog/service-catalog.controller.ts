@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import type { TenantRequest } from '../../common/tenant-context.middleware';
 import { getTenantId } from '../../common/get-tenant-id';
 import { ServiceCatalogService } from './service-catalog/service-catalog.service';
@@ -36,5 +36,26 @@ export class ServiceCatalogController {
       tenantId: getTenantId(req),
       ...body,
     });
+  }
+
+  @Patch(':id')
+  update(
+    @Req() req: TenantRequest,
+    @Param('id') id: string,
+    @Body()
+    body: Partial<{
+      name: string;
+      durationMin: number;
+      priceAmount: number;
+      currency: string;
+      isActive: boolean;
+    }>,
+  ) {
+    return this.serviceCatalogService.updateService(getTenantId(req), id, body);
+  }
+
+  @Delete(':id')
+  remove(@Req() req: TenantRequest, @Param('id') id: string) {
+    return this.serviceCatalogService.deleteService(getTenantId(req), id);
   }
 }

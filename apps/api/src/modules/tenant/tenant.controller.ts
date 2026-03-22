@@ -1,6 +1,6 @@
-import { Body, Controller, Get, Post, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Req } from '@nestjs/common';
 import { TenantService } from './tenant.service';
-import { VerticalType } from '@prisma/client';
+import { UserStatus, VerticalType } from '@prisma/client';
 import type { TenantRequest } from '../../common/tenant-context.middleware';
 import { getTenantId } from '../../common/get-tenant-id';
 
@@ -51,5 +51,48 @@ export class TenantController {
       name: body.name,
       description: body.description,
     });
+  }
+
+  @Get('users')
+  listUsers(@Req() req: TenantRequest) {
+    return this.tenantService.listUsers(getTenantId(req));
+  }
+
+  @Post('users')
+  createUser(
+    @Req() req: TenantRequest,
+    @Body()
+    body: {
+      email: string;
+      fullName: string;
+      branchId?: string | null;
+      isStaff?: boolean;
+      specialty?: string | null;
+      roleCodes?: string[];
+    },
+  ) {
+    return this.tenantService.createUser(getTenantId(req), body);
+  }
+
+  @Patch('users/:id')
+  updateUser(
+    @Req() req: TenantRequest,
+    @Param('id') id: string,
+    @Body()
+    body: Partial<{
+      fullName: string;
+      email: string;
+      branchId: string | null;
+      isStaff: boolean;
+      status: UserStatus;
+      specialty: string | null;
+    }>,
+  ) {
+    return this.tenantService.updateUser(getTenantId(req), id, body);
+  }
+
+  @Delete('users/:id')
+  deleteUser(@Req() req: TenantRequest, @Param('id') id: string) {
+    return this.tenantService.deleteUser(getTenantId(req), id);
   }
 }

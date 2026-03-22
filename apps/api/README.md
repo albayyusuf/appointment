@@ -27,12 +27,33 @@
 
 ### AppointmentOS — SaaS paketleri ve ödeme
 
+- **Başvuru / onboard:** `POST /saas/onboard` — firma bilgileri, **`adminPassword`** (en az 8 karakter, bcrypt ile hash’lenir), isteğe bağlı **`companyPhone`** (`Tenant.phone`). Yönetici şifresi başvuru formunda alınır (ödeme sonrası değil).
 - **Paketler:** `Plan` modeli (`sortOrder`, `badgeLabel`, `stripePriceId`, `featureLines`). Public liste: `GET /saas/plans`.
 - **Platform yönetimi (süper admin paneli):** `GET|POST|PATCH /platform/plans`, `GET|POST|PATCH /platform/bank-accounts`.
 - **Havale/EFT:** `GET /saas/bank-accounts` (aktif hesaplar). Seed’de örnek IBAN.
-- **Stripe:** `POST /saas/stripe/checkout-session` — `STRIPE_SECRET_KEY` ve planda `stripePriceId` (Stripe Price ID) gerekir.
+- **Kiracı paneli:** `GET /saas/tenant-billing?tenantSlug=...` (abonelik, ödemeler, IBAN listesi), `GET /saas/tenant-overview?tenantSlug=...` (şube/personel/randevu/defter özeti + abonelik durumu).
+- **Stripe:** `apps/api/.env` → `STRIPE_SECRET_KEY` (zorunlu), `STRIPE_PUBLISHABLE_KEY` (isteğe bağlı; panel göstergesi). `GET /saas/stripe/config` — publishable öneki ve secret tanımlı mı (anahtarları döndürmez).
+- **Checkout:** `POST /saas/stripe/checkout-session` — `planCode`, **`subscriptionId`**, `successUrl`, `cancelUrl`, `customerEmail`. Satır kalemi için planda **`stripePriceId` (`price_…`)** veya yalnızca **`stripeProductId` (`prod_…`)**; ürün ID verilmişse API, Stripe’dan planın `interval`’ine (aylık/yıllık) uygun recurring **price** seçer.
+- **Tamamlama:** `POST /saas/stripe/complete-checkout` — `{ sessionId }` (success URL’deki `session_id`).
 - **CORS:** `main.ts` içinde `enableCors`; production’da `CORS_ORIGIN=https://app.example.com,https://www.example.com`.
 - **Migration:** `npm run db:migrate` veya `npx prisma migrate deploy` (CI/production).
+
+### Kiracı API (header: `x-tenant-id`)
+
+- **Şubeler:** `GET|POST /branches`, `PATCH|DELETE /branches/:id`
+- **Hizmet kataloğu:** `GET /services?branchId=…`, `POST /services`, `PATCH|DELETE /services/:id`
+- **Kullanıcılar:** `GET|POST /tenants/users`, `PATCH|DELETE /tenants/users/:id`
+- **Vardiyalar:** `GET /schedules` (`branchId`, `staffUserId`, `from`, `to`), `POST /schedules`, `DELETE /schedules/:id`
+- **Rezervasyon iptal:** `POST /employee/reservations/:id/cancel` (gövde: `changedByEmail` vb.)
+
+### Misafir & restoran (header: `x-tenant-id`)
+
+- **Müsaitlik:** `GET /guest/availability?branchId=&serviceId=&date=&staffUserId?`
+- **Takvim:** `GET /guest/staff-calendar?branchId=&date=&serviceId?` (RESTAURANT’da alan satırları)
+- **Alanlar:** `GET /guest/restaurant-areas?branchId=`
+- **Fiyat ipucu:** `GET /guest/pricing-hint?branchId=&date=` → özel gün kuralı özeti
+- **Rezervasyon:** `POST /guest/reservations` — RESTAURANT’ta `staffUserId` **restoran alanı id**’sidir
+- **Önemli gün:** `POST /employee/branch-pricing-day` (gövde: `branchId`, `dateYmd`, `surchargePercent?`, `extraAmount?`, …), **liste:** `GET /employee/branch-pricing-days?branchId=`
 
 ## Project setup
 
@@ -41,6 +62,8 @@ $ npm install
 ```
 
 ## Compile and run the project
+
+İlk çalıştırmada veya `dist` silindiyse: `npm run build`. Watch modunda `dist/main.js` bulunamıyorsa yine bir kez `npm run build` çalıştırın.
 
 ```bash
 # development

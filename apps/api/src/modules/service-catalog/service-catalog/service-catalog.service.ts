@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { CACHE_PORT } from '../../cache/cache.port';
 import type { CachePort } from '../../cache/cache.port';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -20,6 +20,7 @@ export class ServiceCatalogService {
     const services = await this.prisma.service.findMany({
       where: { tenantId, branchId, deletedAt: null },
       orderBy: { createdAt: 'desc' },
+      include: { category: { select: { id: true, name: true } } },
     });
     await this.cache.set(key, services, 60);
     return services;
@@ -71,5 +72,52 @@ export class ServiceCatalogService {
     });
     await this.invalidateBranchServices(input.tenantId, input.branchId);
     return service;
+  }
+
+  async updateService(
+    tenantId: string,
+    serviceId: string,
+    body: Partial<{
+      name: string;
+      durationMin: number;
+      priceAmount: number;
+      currency: string;
+      isActive: boolean;
+    }>,
+  ) {
+    const existing = await this.prisma.service.findFirst({
+      where: { id: serviceId, tenantId, deletedAt: null },
+    });
+    if (!existing) {
+      throw new NotFoundException('Service not found');
+    }
+    const service = await this.prisma.service.update({
+      where: { id: serviceId },
+      data: {
+        ...(body.name !== undefined ? { name: body.name } : {}),
+        ...(body.durationMin !== undefined ? { durationMin: body.durationMin } : {}),
+        ...(body.priceAmount !== undefined ? { priceAmount: body.priceAmount } : {}),
+        ...(body.currency !== undefined ? { currency: body.currency.toUpperCase() } : {}),
+        ...(body.isActive !== undefined ? { isActive: body.isActive } : {}),
+      },
+      include: { category: { select: { id: true, name: true } } },
+    });
+    await this.invalidateBranchServices(tenantId, existing.branchId);
+    return service;
+  }
+
+  async deleteService(tenantId: string, serviceId: string) {
+    const existing = await this.prisma.service.findFirst({
+      where: { id: serviceId, tenantId, deletedAt: null },
+    });
+    if (!existing) {
+      throw new NotFoundException('Service not found');
+    }
+    await this.prisma.service.update({
+      where: { id: serviceId },
+      data: { deletedAt: new Date(), isActive: false },
+    });
+    await this.invalidateBranchServices(tenantId, existing.branchId);
+    return { ok: true as const };
   }
 }

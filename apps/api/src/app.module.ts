@@ -12,9 +12,22 @@ import { PrismaModule } from './modules/prisma/prisma.module';
 import { TenantContextMiddleware } from './common/tenant-context.middleware';
 import { SaasModule } from './modules/saas/saas.module';
 import { AccountingModule } from './modules/accounting/accounting.module';
+import { ScheduleModule } from './modules/schedule/schedule.module';
 
 @Module({
-  imports: [AuthModule, TenantModule, BranchModule, StaffModule, ServiceCatalogModule, AppointmentModule, CacheModule, PrismaModule, SaasModule, AccountingModule],
+  imports: [
+    AuthModule,
+    TenantModule,
+    BranchModule,
+    StaffModule,
+    ServiceCatalogModule,
+    AppointmentModule,
+    ScheduleModule,
+    CacheModule,
+    PrismaModule,
+    SaasModule,
+    AccountingModule,
+  ],
   controllers: [AppController],
   providers: [AppService],
 })

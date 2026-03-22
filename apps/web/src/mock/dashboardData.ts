@@ -6,18 +6,19 @@ export const guestRows = [
   { name: 'Can Erkin', phone: '+90 530 555 55 55', latestReservation: 'Efor testi — 09:15', status: 'VIP' },
 ];
 
+/** Tek şube (Merkez) senaryosu — çok şubeli demo isimleri yok */
 export const employeeRows = [
-  { fullName: 'Elif Yılmaz', role: 'Senior Stylist', branch: 'Çankaya HQ', load: '87%' },
-  { fullName: 'Dr. Selim Türk', role: 'Diş Hekimi', branch: 'Balgat', load: '72%' },
-  { fullName: 'Merve Acar', role: 'Medikal Estetik', branch: 'Etimesgut', load: '64%' },
-  { fullName: 'Deniz Koral', role: 'Colorist', branch: 'Alsancak', load: '91%' },
-  { fullName: 'Dr. Ayşe Korkmaz', role: 'Ortodonti', branch: 'Çankaya HQ', load: '58%' },
-  { fullName: 'Barış Önen', role: 'Resepsiyon', branch: 'Bornova', load: '44%' },
+  { fullName: 'Elif Yılmaz', role: 'Senior Stylist', branch: 'Merkez', load: '87%' },
+  { fullName: 'Dr. Selim Türk', role: 'Diş Hekimi', branch: 'Merkez', load: '72%' },
+  { fullName: 'Merve Acar', role: 'Medikal Estetik', branch: 'Merkez', load: '64%' },
+  { fullName: 'Deniz Koral', role: 'Colorist', branch: 'Merkez', load: '91%' },
+  { fullName: 'Dr. Ayşe Korkmaz', role: 'Ortodonti', branch: 'Merkez', load: '58%' },
+  { fullName: 'Barış Önen', role: 'Resepsiyon', branch: 'Merkez', load: '44%' },
 ];
 
 export const managerRows = [
-  { fullName: 'Onur Demir', role: 'Branch Manager', branch: 'HQ', teamSize: 18 },
-  { fullName: 'Sena Koc', role: 'Operations Manager', branch: 'B1', teamSize: 12 },
+  { fullName: 'Onur Demir', role: 'Branch Manager', branch: 'Merkez', teamSize: 18 },
+  { fullName: 'Sena Koc', role: 'Operations Manager', branch: 'Merkez', teamSize: 12 },
 ];
 
 export const companyRoles = [
@@ -44,8 +45,8 @@ export const services = [
 ];
 
 export const assignmentRows = [
-  { appointmentId: 'appt-demo-1', guest: 'Ayse Demir', reservation: 'Hair Cut 10:30', employee: 'Elif Yilmaz', branch: 'HQ', tenantSlug: 'demo-tenant' },
-  { appointmentId: 'appt-demo-2', guest: 'Mehmet Kaya', reservation: 'Dental Check 11:15', employee: 'Dr. Selim Turk', branch: 'B1', tenantSlug: 'demo-tenant' },
+  { appointmentId: 'appt-demo-1', guest: 'Ayse Demir', reservation: 'Hair Cut 10:30', employee: 'Elif Yilmaz', branch: 'Merkez', tenantSlug: 'demo-tenant' },
+  { appointmentId: 'appt-demo-2', guest: 'Mehmet Kaya', reservation: 'Dental Check 11:15', employee: 'Dr. Selim Turk', branch: 'Merkez', tenantSlug: 'demo-tenant' },
 ];
 
 export const accountingRows = [

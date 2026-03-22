@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Activity,
@@ -9,12 +9,18 @@ import {
   BriefcaseBusiness,
   Building2,
   Calculator,
+  Calendar,
   CalendarClock,
   Check,
   ChevronLeft,
   ChevronRight,
   ClipboardList,
   Clock,
+  Loader2,
+  Mail,
+  Phone,
+  Send,
+  User,
   Download,
   RefreshCw,
   UserCircle2,
@@ -28,12 +34,13 @@ import {
   ShieldCheck,
   Sparkles,
   SunMedium,
+  Utensils,
   UserRoundCheck,
   UserRoundPlus,
   Users,
   Wrench,
 } from 'lucide-react';
-import { apiGet, apiGetWithHeaders, apiPatch, apiPost } from './core/api/client';
+import { apiDelete, apiGet, apiGetWithHeaders, apiPatch, apiPost } from './core/api/client';
 import { translations, type Lang } from './i18n/translations';
 import { employeeRows, managerRows } from './mock/dashboardData';
 import {
@@ -41,13 +48,17 @@ import {
   buildDemoStaffCalendar,
   demoReservationSuccessMessage,
   getDemoBranches,
+  getDemoPricingHintForDate,
+  getDemoSpecialPricingDateYmd,
   getDemoServicesForBranch,
+  guestBranchesAreDemoPack,
+  guestDemoBundleTenantId,
   isDemoTenantId,
+  slugToDemoTenantId,
 } from './mock/demoReservationData';
 
 type TabKey =
   | 'overview'
-  | 'showcase'
   | 'billing'
   | 'operations'
   | 'guests'
@@ -61,7 +72,15 @@ type TabKey =
   | 'accounting'
   | 'saasPlans';
 type Overview = { tenants: number; activeSubscriptions: number; totalPaidAmount: string | number; superAdmins: number };
-type TenantSummary = { id: string; name: string; slug: string; vertical: 'BEAUTY' | 'HEALTH'; branches: number; subscriptionStatus: string; planName: string };
+type TenantSummary = {
+  id: string;
+  name: string;
+  slug: string;
+  vertical: 'BEAUTY' | 'HEALTH' | 'RESTAURANT';
+  branches: number;
+  subscriptionStatus: string;
+  planName: string;
+};
 type Plan = {
   id: string;
   name: string;
@@ -76,6 +95,7 @@ type Plan = {
   sortOrder?: number;
   badgeLabel?: string | null;
   stripePriceId?: string | null;
+  stripeProductId?: string | null;
   featureLines?: unknown;
   isActive?: boolean;
 };
@@ -90,9 +110,87 @@ type PlatformBankAccount = {
   sortOrder: number;
   isActive: boolean;
 };
-type RecentPayment = { id: string; amount: string; status: string; subscription: { tenant: { name: string }; plan: { name: string } } };
+type RecentPayment = {
+  id: string;
+  amount: string;
+  status: string;
+  paidAt?: string | null;
+  createdAt?: string;
+  provider?: string;
+  providerRef?: string | null;
+  subscription: { id: string; tenant: { name: string }; plan: { name: string } };
+};
+type TenantBillingPayload = {
+  tenant: { id: string; name: string; slug: string; vertical: string; defaultCurrency: string };
+  subscription: {
+    id: string;
+    status: string;
+    nextBillingAt: string | null;
+    trialEndsAt: string | null;
+    plan: {
+      code: string;
+      name: string;
+      priceAmount: string;
+      currency: string;
+      interval: string;
+      maxBranches: number;
+      maxStaff: number;
+      maxAppointmentsMo: number;
+      stripePriceId?: string | null;
+    };
+    payments: Array<{
+      id: string;
+      amount: string;
+      currency: string;
+      status: string;
+      provider: string;
+      providerRef: string | null;
+      paidAt: string | null;
+      createdAt: string;
+    }>;
+  } | null;
+  bankAccounts: PlatformBankAccount[];
+};
+type TenantOverviewPayload = {
+  tenant: { name: string; slug: string; vertical: string; defaultCurrency: string };
+  metrics: {
+    branches: number;
+    staff: number;
+    appointmentsLast7Days: number;
+    appointmentsTotal: number;
+    serviceIncomeTotal: string | number;
+  };
+  subscription: {
+    id: string;
+    status: string;
+    planName: string;
+    planCode: string;
+    nextBillingAt: string | null;
+    trialEndsAt: string | null;
+  } | null;
+};
 type DevProfile = 'superAdmin' | 'companyManager' | 'franchiseManager' | 'employee' | 'guest';
-type BranchLite = { id: string; name: string; code: string };
+type BranchLite = { id: string; name: string; code: string; tenantId?: string };
+
+/** Şube listesinden varsayılan: ana şube (HQ), yoksa ilk kayıt */
+function pickDefaultBranchId(rows: BranchLite[]): string {
+  if (!rows.length) return '';
+  const hq = rows.find((b) => b.code?.toUpperCase() === 'HQ');
+  return hq?.id ?? rows[0].id;
+}
+
+function syncBranchIdsForTenantRows(
+  rows: BranchLite[],
+  prevBranchId: string,
+): { branchId: string; clearService: boolean } {
+  const defaultId = pickDefaultBranchId(rows);
+  const inList = rows.some((b) => b.id === prevBranchId);
+  return {
+    branchId: inList ? prevBranchId : defaultId,
+    clearService: !inList,
+  };
+}
+
 type ServiceLite = { id: string; name: string; durationMin: number; priceAmount: string; currency: string; category?: { name: string } };
 type AvailabilitySlot = { staffUserId: string; staffName: string; startsAt: string; endsAt: string };
 type LedgerEntry = { id: string; createdAt: string; type: string; description?: string; amount: string; currency: string };
@@ -103,12 +201,24 @@ type ReservationRow = {
   startsAt: string;
   customer: { fullName: string };
   service: { name: string };
-  staffUser: { fullName: string };
+  /** Güzellik / sağlık */
+  staffUser: { fullName: string } | null;
+  /** RESTAURANT: alan adı (staffUser boş olabilir) */
+  restaurantArea?: { name: string; code?: string } | null;
   branch: { name: string };
 };
-type ReservationStatusFilter = 'ALL' | 'PENDING' | 'CONFIRMED' | 'IN_PROGRESS' | 'COMPLETED';
+type BranchPricingDayRow = {
+  id: string;
+  date: string;
+  label: string | null;
+  surchargePercent: number | null;
+  extraAmount: number | null;
+  note: string | null;
+  isActive: boolean;
+};
+type ReservationStatusFilter = 'ALL' | 'PENDING' | 'CONFIRMED' | 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
 type LedgerTypeFilter = 'ALL' | 'INCOME' | 'CASH_IN';
-type Vertical = 'BEAUTY' | 'HEALTH';
+type Vertical = 'BEAUTY' | 'HEALTH' | 'RESTAURANT';
 type RoleRow = { id: string; code: string; name: string; description?: string };
 type StaffCalendarRow = {
   staffUserId: string;
@@ -118,6 +228,48 @@ type StaffCalendarRow = {
   bookedCount: number;
   freeCount: number;
 };
+type TenantUserRow = {
+  id: string;
+  email: string;
+  fullName: string;
+  isStaff: boolean;
+  status: string;
+  branch?: { name: string; code: string } | null;
+  staffProfile?: { specialty: string | null } | null;
+  userRoles: Array<{ role: { code: string; name: string } }>;
+};
+type ScheduleRow = {
+  id: string;
+  startsAt: string;
+  endsAt: string;
+  staffUser: { id: string; fullName: string; email: string };
+  branch: { id: string; name: string; code: string };
+};
+
+const APPLY_PURCHASE_STORAGE_KEY = 'appointment_apply_purchase_v1';
+type PurchaseContext = {
+  subscriptionId: string;
+  tenantSlug: string;
+  planCode: string;
+  companyName: string;
+  adminEmail: string;
+};
+function loadStoredPurchase(): PurchaseContext | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = sessionStorage.getItem(APPLY_PURCHASE_STORAGE_KEY);
+    if (!raw) return null;
+    const p = JSON.parse(raw) as PurchaseContext;
+    if (p?.subscriptionId && p?.planCode) return p;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+function paymentInvoiceLabel(paymentId: string) {
+  return `INV-${paymentId.slice(0, 8).toUpperCase()}`;
+}
 
 function pad2(n: number) {
   return String(n).padStart(2, '0');
@@ -189,10 +341,12 @@ function recommendPlanCode(
 }
 
 const fallbackOverview: Overview = { tenants: 12, activeSubscriptions: 9, totalPaidAmount: '124000', superAdmins: 2 };
+/** Offline demo: API’deki gibi her kiracıda tek şube (HQ) — şube sayısı yanıltmasın diye hep 1 */
 const fallbackTenants: TenantSummary[] = [
-  { id: '1', name: 'Ankara Smile Clinic', slug: 'ankara-clinic', vertical: 'HEALTH', branches: 3, subscriptionStatus: 'ACTIVE', planName: 'Growth' },
-  { id: '2', name: 'Izmir Beauty Lounge', slug: 'izmir-beauty', vertical: 'BEAUTY', branches: 2, subscriptionStatus: 'TRIAL', planName: 'Starter' },
-  { id: '3', name: 'Bursa Med Center', slug: 'bursa-hospital', vertical: 'HEALTH', branches: 5, subscriptionStatus: 'PAST_DUE', planName: 'Enterprise' },
+  { id: '1', name: 'Çankaya Ağız ve Diş Polikliniği', slug: 'ankara-clinic', vertical: 'HEALTH', branches: 1, subscriptionStatus: 'ACTIVE', planName: 'Orta ölçek' },
+  { id: '2', name: 'Glow İzmir Güzellik Salonu', slug: 'izmir-beauty', vertical: 'BEAUTY', branches: 1, subscriptionStatus: 'TRIAL', planName: 'Başlangıç' },
+  { id: '3', name: 'Bursa Kardiyoloji Polikliniği', slug: 'bursa-hospital', vertical: 'HEALTH', branches: 1, subscriptionStatus: 'PAST_DUE', planName: 'Kurumsal' },
+  { id: '4', name: 'Bebek Boğaz Restoran', slug: 'istanbul-restaurant', vertical: 'RESTAURANT', branches: 1, subscriptionStatus: 'ACTIVE', planName: 'Orta ölçek' },
 ];
 
 /** API kapalıyken anasayfa / başvuru paketleri (kodlar seed ile uyumlu) */
@@ -200,58 +354,64 @@ const FALLBACK_PLANS: Plan[] = [
   {
     id: 'fb-starter',
     code: 'STARTER_MONTHLY',
-    name: 'Salon & Studio',
+    name: 'Başlangıç',
     priceAmount: '1299',
     interval: 'MONTHLY',
     maxBranches: 2,
     maxStaff: 18,
-    description: 'Güzellik, berber, nail ve tek şube işletmeleri için giriş paketi.',
+    description: 'Küçük ve tek nokta işletmeler için giriş seviyesi paket.',
     trialDays: 14,
     maxAppointmentsMo: 3500,
     sortOrder: 1,
-    badgeLabel: 'Başlangıç',
+    isActive: true,
+    stripeProductId: 'prod_UCDKAVRNr1ro2o',
+    badgeLabel: null,
     featureLines: [
-      'Güzellik salonu, barber, nail: tek–çift şube',
-      'Misafir rezervasyonu, çalışan takvimi, bildirimler',
+      'Tek ve çift şube; misafir rezervasyonu ve çalışan takvimi',
+      'Bildirimler ve temel operasyon akışları',
       'Ön muhasebe / kasa kayıtları (paket kotasına göre)',
     ],
   },
   {
     id: 'fb-growth',
     code: 'GROWTH_MONTHLY',
-    name: 'Klinik & Operasyon',
+    name: 'Orta ölçek',
     priceAmount: '3499',
     interval: 'MONTHLY',
     maxBranches: 12,
     maxStaff: 90,
-    description: 'Sağlık, diş ve çok şubeli klinikler için operasyon odağı.',
+    description: 'Büyüyen ve çok şubeli işletmeler için orta ölçek paket.',
     trialDays: 14,
     maxAppointmentsMo: 30000,
     sortOrder: 2,
+    isActive: true,
+    stripeProductId: 'prod_UCDKaBRouUUOdv',
     badgeLabel: 'En çok tercih edilen',
     featureLines: [
-      'Klinik & çok şube: şube bazlı hizmet ve roller',
-      'Operasyon ekranı, atama, durum akışı',
-      'Raporlama ve SaaS faturalama entegrasyonuna hazır',
+      'Çok şube yönetimi; şube bazlı hizmet ve roller',
+      'Operasyon ekranı, atama ve durum takibi',
+      'Raporlama ve faturalama entegrasyonuna hazır altyapı',
     ],
   },
   {
     id: 'fb-ent',
     code: 'ENTERPRISE_YEARLY',
-    name: 'Zincir & Franchise',
+    name: 'Kurumsal',
     priceAmount: '34999',
     interval: 'YEARLY',
     maxBranches: 999,
     maxStaff: 9999,
-    description: 'Ülke çapı zincir, hastane grupları ve franchise yönetimi.',
+    description: 'Ülke çapı organizasyonlar ve yüksek iş hacmi için kurumsal paket.',
     trialDays: 30,
     maxAppointmentsMo: 500000,
     sortOrder: 3,
-    badgeLabel: 'Kurumsal',
+    isActive: true,
+    stripeProductId: 'prod_UCDKfsX9j3LtRr',
+    badgeLabel: null,
     featureLines: [
-      'Franchise / zincir: sınırsız şube kotası',
-      'Kurumsal SLA, özel entegrasyon ve veri izolasyonu',
-      'Havale/EFT + Stripe ile tahsilat (platform hesapları)',
+      'Yüksek şube ve personel kotası; büyük hacim randevu',
+      'SLA, özel entegrasyon ve veri izolasyonu seçenekleri',
+      'Havale/EFT ve Stripe ile platform üzerinden tahsilat',
     ],
   },
 ];
@@ -270,7 +430,7 @@ export function App() {
   const [lang, setLang] = useState<Lang>('tr');
   const [tab, setTab] = useState<TabKey>('overview');
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [employeeModalOpen, setEmployeeModalOpen] = useState(false);
+  const [userModalMode, setUserModalMode] = useState<'employee' | 'manager' | null>(null);
   const [overview, setOverview] = useState<Overview>(fallbackOverview);
   const [tenants, setTenants] = useState<TenantSummary[]>(fallbackTenants);
   const [plans, setPlans] = useState<Plan[]>(FALLBACK_PLANS);
@@ -280,7 +440,24 @@ export function App() {
   const [adminBanks, setAdminBanks] = useState<PlatformBankAccount[]>([]);
   const [localPlans, setLocalPlans] = useState<Plan[]>([]);
   const [localBanks, setLocalBanks] = useState<PlatformBankAccount[]>([]);
-  const [newEmployee, setNewEmployee] = useState({ name: '', email: '', role: '', branch: '' });
+  const [stripeStatus, setStripeStatus] = useState<{ publishableKey: string; secretKeyConfigured: boolean } | null>(null);
+  const [userCreateForm, setUserCreateForm] = useState({
+    email: '',
+    fullName: '',
+    branchId: '',
+    specialty: '',
+  });
+  const [tenantUsers, setTenantUsers] = useState<TenantUserRow[]>([]);
+  const [branchCrudForm, setBranchCrudForm] = useState({ name: '', code: '', city: '' });
+  const [scheduleRows, setScheduleRows] = useState<ScheduleRow[]>([]);
+  const [opsBranchId, setOpsBranchId] = useState('');
+  const [scheduleCreateForm, setScheduleCreateForm] = useState({ staffUserId: '', startsAt: '', endsAt: '' });
+  const [serviceEditDraft, setServiceEditDraft] = useState<null | {
+    id: string;
+    name: string;
+    durationMin: number;
+    priceAmount: number;
+  }>(null);
   const [devProfile, setDevProfile] = useState<DevProfile>('superAdmin');
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [selectedTenantId, setSelectedTenantId] = useState<string>('');
@@ -307,6 +484,16 @@ export function App() {
   const [ledger, setLedger] = useState<LedgerEntry[]>([]);
   const [notifications, setNotifications] = useState<NotificationRow[]>([]);
   const [cashInForm, setCashInForm] = useState({ amount: 0, currency: 'TRY', description: '' });
+  const [restaurantPricingForm, setRestaurantPricingForm] = useState({
+    branchId: '',
+    dateYmd: '',
+    surchargePercent: '15',
+    extraAmount: '',
+    label: '',
+    note: '',
+  });
+  const [branchPricingDays, setBranchPricingDays] = useState<BranchPricingDayRow[]>([]);
+  const [branchPricingDaysLoading, setBranchPricingDaysLoading] = useState(false);
   const [selectedSubscriptionId, setSelectedSubscriptionId] = useState('');
   const [branchServices, setBranchServices] = useState<ServiceLite[]>([]);
   const [reservations, setReservations] = useState<ReservationRow[]>([]);
@@ -320,14 +507,27 @@ export function App() {
     companyName: '',
     slug: '',
     vertical: 'BEAUTY' as Vertical,
+    companyPhone: '',
     adminFullName: '',
     adminEmail: '',
+    adminPassword: '',
+    adminPasswordConfirm: '',
     planCode: '',
     defaultCurrency: 'TRY',
   });
   const [roleForm, setRoleForm] = useState({ code: '', name: '', description: '' });
   const [applicationType, setApplicationType] = useState<'company' | 'franchise'>('company');
-  const [applyStep, setApplyStep] = useState(1);
+  const [purchaseContext, setPurchaseContext] = useState<PurchaseContext | null>(() => {
+    if (typeof window === 'undefined') return null;
+    const p = window.location.pathname;
+    return p === '/apply' || p === '/app/showcase' ? loadStoredPurchase() : null;
+  });
+  const [applyStep, setApplyStep] = useState(() => {
+    if (typeof window === 'undefined') return 1;
+    const p = window.location.pathname;
+    if (p !== '/apply' && p !== '/app/showcase') return 1;
+    return loadStoredPurchase() ? 5 : 1;
+  });
   const [applyNeeds, setApplyNeeds] = useState({
     branchScale: '1' as '1' | '2-5' | '5+',
     teamScale: 'small' as 'small' | 'medium' | 'large',
@@ -336,22 +536,49 @@ export function App() {
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [applyNotes, setApplyNotes] = useState('');
   const [applySubmitting, setApplySubmitting] = useState(false);
+  const [paymentSubmitting, setPaymentSubmitting] = useState(false);
+  const [stripeSubmitting, setStripeSubmitting] = useState(false);
+  const stripeReturnHandledRef = useRef(false);
+  const [tenantBilling, setTenantBilling] = useState<TenantBillingPayload | null>(null);
+  const [tenantOverview, setTenantOverview] = useState<TenantOverviewPayload | null>(null);
+  const [billingTabLoading, setBillingTabLoading] = useState(false);
+  const [overviewTenantLoading, setOverviewTenantLoading] = useState(false);
   const [actionMessage, setActionMessage] = useState('');
   const [publicNavOpen, setPublicNavOpen] = useState(false);
   const [customerNotifs, setCustomerNotifs] = useState<NotificationRow[]>([]);
   const [slotsLoading, setSlotsLoading] = useState(false);
+  const [pricingHint, setPricingHint] = useState<{
+    hasRule: boolean;
+    label?: string;
+    surchargePercent?: number | null;
+    extraAmount?: number | null;
+    note?: string | null;
+  } | null>(null);
+  /** Saat tıklanınca hemen API çağrısı yok; en alttaki talep formu ile gönderilir */
+  const [pendingSlot, setPendingSlot] = useState<AvailabilitySlot | null>(null);
+  const [reservationSubmitting, setReservationSubmitting] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams] = useSearchParams();
-  const isAdminPath = location.pathname.startsWith('/app');
+  /** Paket satın alma sihirbazı: light arayüz, dashboard değil */
+  const isSubscribeShowcasePath = location.pathname === '/app/showcase';
+  const isAdminPath = location.pathname.startsWith('/app') && !isSubscribeShowcasePath;
+  const isApplyWizardPath = location.pathname === '/apply' || isSubscribeShowcasePath;
+  const isDev = import.meta.env.DEV;
+  const DEV_ADMIN_LOGIN_KEY = 'appointment_admin_dev_login_v1';
 
   const t = translations[lang];
 
+  /** Anasayfa + başvuru: yalnızca aktif paketler (STARTER_MONTHLY, GROWTH_MONTHLY, ENTERPRISE_YEARLY) */
+  const visiblePlans = useMemo(() => plans.filter((p) => p.isActive !== false), [plans]);
   const recommendedPlanCode = useMemo(
-    () => recommendPlanCode(plans, applicationType, applyNeeds),
-    [plans, applicationType, applyNeeds],
+    () => recommendPlanCode(visiblePlans, applicationType, applyNeeds),
+    [visiblePlans, applicationType, applyNeeds],
   );
-  const applyFeaturedPlanIdx = useMemo(() => (plans.length ? Math.floor((plans.length - 1) / 2) : 0), [plans.length]);
+  const applyFeaturedPlanIdx = useMemo(
+    () => (visiblePlans.length ? Math.floor((visiblePlans.length - 1) / 2) : 0),
+    [visiblePlans.length],
+  );
   const ledgerSummary = useMemo(() => {
     let income = 0;
     let cashIn = 0;
@@ -454,19 +681,66 @@ export function App() {
   }, [location.pathname]);
 
   useEffect(() => {
-    if (location.pathname !== '/apply') {
+    if (!isApplyWizardPath) {
       setApplyStep(1);
       setTermsAccepted(false);
+      return;
     }
-  }, [location.pathname]);
+    const pending = loadStoredPurchase();
+    if (pending) {
+      setPurchaseContext(pending);
+      setApplyStep(5);
+    }
+  }, [location.pathname, isApplyWizardPath]);
+
+  /** Stripe Checkout dönüşü (?stripe=1&session_id=...) */
+  useEffect(() => {
+    if (!isApplyWizardPath) return;
+    const stripeFlag = searchParams.get('stripe');
+    const sessionId = searchParams.get('session_id');
+    if (stripeFlag !== '1' || !sessionId || stripeReturnHandledRef.current) return;
+    stripeReturnHandledRef.current = true;
+    let cancelled = false;
+    (async () => {
+      try {
+        await apiPost<{ ok: boolean }>('/saas/stripe/complete-checkout', { sessionId });
+        if (cancelled) return;
+        sessionStorage.removeItem(APPLY_PURCHASE_STORAGE_KEY);
+        setPurchaseContext(null);
+        setApplyStep(1);
+        setActionMessage(t.paymentCompleteSuccess);
+        navigate(isSubscribeShowcasePath ? '/app/showcase' : '/apply', { replace: true });
+      } catch {
+        if (!cancelled) {
+          stripeReturnHandledRef.current = false;
+          setActionMessage(t.paymentFailed);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [location.pathname, searchParams, navigate, t.paymentCompleteSuccess, t.paymentFailed, isSubscribeShowcasePath]);
+
+  /** Stripe iptal dönüşü */
+  useEffect(() => {
+    if (!isApplyWizardPath) return;
+    if (searchParams.get('stripe_cancel') !== '1') return;
+    const p = loadStoredPurchase();
+    if (p) {
+      setPurchaseContext(p);
+      setApplyStep(5);
+    }
+    navigate(isSubscribeShowcasePath ? '/app/showcase' : '/apply', { replace: true });
+  }, [location.pathname, searchParams, navigate, isApplyWizardPath, isSubscribeShowcasePath]);
 
   useEffect(() => {
-    if (location.pathname !== '/apply') return;
+    if (!isApplyWizardPath) return;
     const p = searchParams.get('plan');
     if (p && plans.some((pl) => pl.code === p)) {
       setOnboardForm((s) => ({ ...s, planCode: p }));
     }
-  }, [location.pathname, searchParams, plans]);
+  }, [location.pathname, searchParams, plans, isApplyWizardPath]);
 
   useEffect(() => {
     if (!isAdminPath || location.pathname !== '/app/overview') return;
@@ -480,6 +754,18 @@ export function App() {
     sessionStorage.removeItem('pendingDevProfile');
   }, [isAdminPath, location.pathname]);
 
+  /** Geliştirme: tarayıcıda “hızlı giriş” tercihini hatırla */
+  useEffect(() => {
+    if (!isAdminPath || !isDev) return;
+    try {
+      if (window.localStorage.getItem(DEV_ADMIN_LOGIN_KEY) === '1') {
+        setIsLoggedIn(true);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, [isAdminPath, isDev]);
+
   useEffect(() => {
     const onReservePage = !isAdminPath && location.pathname === '/reserve';
     const onAdminGuests = isAdminPath && tab === 'guests';
@@ -488,10 +774,13 @@ export function App() {
       setStaffCalendar([]);
       return;
     }
-    if (isDemoTenantId(selectedTenantId)) {
+    const bundleId = guestDemoBundleTenantId(selectedTenantId, tenants);
+    const useDemoCal =
+      isDemoTenantId(selectedTenantId) || (bundleId != null && guestBranchesAreDemoPack(branches));
+    if (useDemoCal && bundleId != null) {
       setStaffCalendar(
         buildDemoStaffCalendar({
-          tenantId: selectedTenantId,
+          tenantId: bundleId,
           branchId: guestForm.branchId,
           date: guestForm.date,
           serviceId: guestForm.serviceId || undefined,
@@ -512,16 +801,19 @@ export function App() {
       }
     }
     void loadCal();
-  }, [isAdminPath, location.pathname, tab, selectedTenantId, guestForm.branchId, guestForm.date, guestForm.serviceId]);
+  }, [isAdminPath, location.pathname, tab, selectedTenantId, tenants, branches, guestForm.branchId, guestForm.date, guestForm.serviceId]);
 
   const refreshSlots = useCallback(async () => {
     if (!selectedTenantId || !guestForm.branchId || !guestForm.serviceId || !guestForm.date) return;
     setSlotsLoading(true);
     try {
-      if (isDemoTenantId(selectedTenantId)) {
+      const bundleId = guestDemoBundleTenantId(selectedTenantId, tenants);
+      const useDemoSlots =
+        isDemoTenantId(selectedTenantId) || (bundleId != null && guestBranchesAreDemoPack(branches));
+      if (useDemoSlots && bundleId != null) {
         setAvailability(
           buildDemoAvailability({
-            tenantId: selectedTenantId,
+            tenantId: bundleId,
             branchId: guestForm.branchId,
             serviceId: guestForm.serviceId,
             date: guestForm.date,
@@ -546,7 +838,7 @@ export function App() {
     } finally {
       setSlotsLoading(false);
     }
-  }, [selectedTenantId, guestForm.branchId, guestForm.serviceId, guestForm.date, guestForm.staffUserId]);
+  }, [selectedTenantId, tenants, branches, guestForm.branchId, guestForm.serviceId, guestForm.date, guestForm.staffUserId]);
 
   useEffect(() => {
     const ctx = location.pathname === '/reserve' || (isAdminPath && tab === 'guests');
@@ -570,6 +862,47 @@ export function App() {
     guestForm.staffUserId,
     refreshSlots,
   ]);
+
+  useEffect(() => {
+    const ctx = location.pathname === '/reserve' || (isAdminPath && tab === 'guests');
+    if (!ctx || !guestForm.date || !guestForm.branchId || !selectedTenantId) {
+      setPricingHint(null);
+      return;
+    }
+    const tenant = tenants.find((x) => x.id === selectedTenantId);
+    if (tenant?.vertical !== 'RESTAURANT') {
+      setPricingHint(null);
+      return;
+    }
+    const bundleId = guestDemoBundleTenantId(selectedTenantId, tenants);
+    const useDemoRestaurantHint =
+      isDemoTenantId(selectedTenantId) || (bundleId != null && guestBranchesAreDemoPack(branches));
+    if (useDemoRestaurantHint && bundleId != null) {
+      setPricingHint(getDemoPricingHintForDate(guestForm.date));
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const h = await apiGetWithHeaders<{
+          hasRule: boolean;
+          label?: string;
+          surchargePercent?: number | null;
+          extraAmount?: number | null;
+          note?: string | null;
+        }>(
+          `/guest/pricing-hint?branchId=${encodeURIComponent(guestForm.branchId)}&date=${encodeURIComponent(guestForm.date)}`,
+          { 'x-tenant-id': selectedTenantId },
+        );
+        if (!cancelled) setPricingHint(h);
+      } catch {
+        if (!cancelled) setPricingHint(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [guestForm.date, guestForm.branchId, selectedTenantId, location.pathname, isAdminPath, tab, tenants, branches]);
 
   useEffect(() => {
     async function load() {
@@ -601,15 +934,18 @@ export function App() {
     if (!isAdminPath || tab !== 'saasPlans' || devProfile !== 'superAdmin') return;
     async function loadAdmin() {
       try {
-        const [p, b] = await Promise.all([
+        const [p, b, stripeCfg] = await Promise.all([
           apiGet<Plan[]>('/platform/plans'),
           apiGet<PlatformBankAccount[]>('/platform/bank-accounts'),
+          apiGet<{ publishableKey: string; secretKeyConfigured: boolean }>('/saas/stripe/config').catch(() => null),
         ]);
         setAdminPlans(p);
         setAdminBanks(b);
+        setStripeStatus(stripeCfg);
       } catch {
         setAdminPlans(FALLBACK_PLANS);
         setAdminBanks([]);
+        setStripeStatus(null);
       }
     }
     void loadAdmin();
@@ -633,9 +969,19 @@ export function App() {
     [overview, t.totalTenants, t.activeSubscriptions, t.totalPaid, t.superAdmins, t.thisWeekGrowth, t.healthyGrowth, t.saasRevenue, t.platformControl],
   );
 
+  const platformSubscriptionOptions = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const p of payments) {
+      const sid = p.subscription?.id;
+      if (sid && !m.has(sid)) {
+        m.set(sid, `${p.subscription.tenant.name} — ${p.subscription.plan.name}`);
+      }
+    }
+    return Array.from(m.entries()).map(([id, label]) => ({ id, label }));
+  }, [payments]);
+
   const pathByTab: Record<TabKey, string> = {
     overview: '/app/overview',
-    showcase: '/app/showcase',
     billing: '/app/billing',
     operations: '/app/operations',
     guests: '/app/guests',
@@ -652,7 +998,6 @@ export function App() {
   const tabByPath = Object.entries(pathByTab).reduce((acc, [k, v]) => ({ ...acc, [v]: k as TabKey }), {} as Record<string, TabKey>);
   const iconByTab: Record<TabKey, ReactNode> = {
     overview: <LayoutDashboard size={16} />,
-    showcase: <LayoutDashboard size={16} />,
     billing: <Banknote size={16} />,
     operations: <Activity size={16} />,
     guests: <UserRoundPlus size={16} />,
@@ -667,13 +1012,13 @@ export function App() {
     saasPlans: <Package size={16} />,
   };
   const allowedTabsByRole: Record<DevProfile, TabKey[]> = {
-    superAdmin: ['showcase', 'overview', 'billing', 'operations', 'guests', 'employees', 'managers', 'companyRoles', 'franchiseRoles', 'subRoles', 'services', 'assignment', 'accounting', 'saasPlans'],
-    companyManager: ['showcase', 'overview', 'billing', 'operations', 'employees', 'managers', 'companyRoles', 'services', 'assignment', 'accounting'],
-    franchiseManager: ['showcase', 'overview', 'operations', 'employees', 'managers', 'franchiseRoles', 'services', 'assignment', 'accounting'],
-    employee: ['showcase', 'overview', 'operations', 'guests', 'assignment'],
-    guest: ['showcase', 'overview', 'billing', 'guests'],
+    superAdmin: ['overview', 'billing', 'operations', 'guests', 'employees', 'managers', 'companyRoles', 'franchiseRoles', 'subRoles', 'services', 'assignment', 'accounting', 'saasPlans'],
+    companyManager: ['overview', 'billing', 'operations', 'employees', 'managers', 'companyRoles', 'services', 'assignment', 'accounting'],
+    franchiseManager: ['overview', 'billing', 'operations', 'employees', 'managers', 'franchiseRoles', 'services', 'assignment', 'accounting'],
+    employee: ['overview', 'operations', 'guests', 'assignment'],
+    guest: ['overview', 'billing', 'guests'],
   };
-  const visibleTabs: TabKey[] = isLoggedIn ? allowedTabsByRole[devProfile] : ['showcase', 'overview', 'billing', 'guests'];
+  const visibleTabs: TabKey[] = isLoggedIn ? allowedTabsByRole[devProfile] : ['overview', 'billing', 'guests'];
 
   useEffect(() => {
     const mapped = tabByPath[location.pathname];
@@ -695,8 +1040,11 @@ export function App() {
     navigate(pathByTab[next]);
   };
 
+  /** Kiracı listesi değişince (API vs demo) seçili id geçersizse ilk kiracıya dön */
   useEffect(() => {
-    if (tenants.length > 0 && !selectedTenantId) {
+    if (tenants.length === 0) return;
+    const valid = tenants.some((x) => x.id === selectedTenantId);
+    if (!valid) {
       setSelectedTenantId(tenants[0].id);
     }
   }, [tenants, selectedTenantId]);
@@ -707,103 +1055,462 @@ export function App() {
       if (isDemoTenantId(selectedTenantId)) {
         const demo = getDemoBranches(selectedTenantId);
         setBranches(demo);
-        if (demo[0]) {
-          setServiceForm((prev) => ({ ...prev, branchId: demo[0].id }));
-          setGuestForm((prev) => ({
-            ...prev,
-            branchId: demo.some((b) => b.id === prev.branchId) ? prev.branchId : demo[0].id,
-          }));
+        if (demo.length) {
+          setServiceForm((prev) => {
+            const s = syncBranchIdsForTenantRows(demo, prev.branchId);
+            return { ...prev, branchId: s.branchId };
+          });
+          setGuestForm((prev) => {
+            const s = syncBranchIdsForTenantRows(demo, prev.branchId);
+            return {
+              ...prev,
+              branchId: s.branchId,
+              serviceId: s.clearService ? '' : prev.serviceId,
+              staffUserId: s.clearService ? '' : prev.staffUserId,
+            };
+          });
+        } else {
+          setBranches([]);
+          setGuestForm((prev) => ({ ...prev, branchId: '', serviceId: '', staffUserId: '' }));
         }
         return;
       }
-      try {
-        const rows = await apiGetWithHeaders<BranchLite[]>('/branches', { 'x-tenant-id': selectedTenantId });
+
+      const applyFromRows = (rows: BranchLite[]) => {
         setBranches(rows);
-        if (rows[0]) {
-          setServiceForm((prev) => ({ ...prev, branchId: rows[0].id }));
-          setGuestForm((prev) => ({ ...prev, branchId: prev.branchId || rows[0].id }));
+        if (rows.length) {
+          setServiceForm((prev) => {
+            const s = syncBranchIdsForTenantRows(rows, prev.branchId);
+            return { ...prev, branchId: s.branchId };
+          });
+          setGuestForm((prev) => {
+            const s = syncBranchIdsForTenantRows(rows, prev.branchId);
+            return {
+              ...prev,
+              branchId: s.branchId,
+              serviceId: s.clearService ? '' : prev.serviceId,
+              staffUserId: s.clearService ? '' : prev.staffUserId,
+            };
+          });
+        } else {
+          setGuestForm((prev) => ({ ...prev, branchId: '', serviceId: '', staffUserId: '' }));
+        }
+      };
+
+      try {
+        const raw = await apiGet<BranchLite[]>(
+          `/guest/branches?tenantId=${encodeURIComponent(selectedTenantId)}`,
+        );
+        const rows = Array.isArray(raw) ? raw : [];
+        if (rows.length === 0) {
+          const slug = tenants.find((t) => t.id === selectedTenantId)?.slug;
+          const dId = slugToDemoTenantId(slug);
+          if (dId) {
+            applyFromRows(getDemoBranches(dId));
+          } else {
+            applyFromRows([]);
+          }
+        } else {
+          applyFromRows(rows);
         }
       } catch {
-        // Keep UI usable if endpoint is unavailable.
+        const slug = tenants.find((t) => t.id === selectedTenantId)?.slug;
+        const dId = slugToDemoTenantId(slug);
+        if (dId) {
+          applyFromRows(getDemoBranches(dId));
+        } else {
+          setBranches([]);
+          setGuestForm((prev) => ({ ...prev, branchId: '', serviceId: '', staffUserId: '' }));
+        }
       }
     }
     loadBranches();
+  }, [selectedTenantId, tenants]);
+
+  const reloadSchedules = useCallback(async () => {
+    if (!selectedTenantId || isDemoTenantId(selectedTenantId) || !opsBranchId) return;
+    const from = new Date();
+    const to = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+    try {
+      const rows = await apiGetWithHeaders<ScheduleRow[]>(
+        `/schedules?branchId=${encodeURIComponent(opsBranchId)}&from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`,
+        { 'x-tenant-id': selectedTenantId },
+      );
+      setScheduleRows(Array.isArray(rows) ? rows : []);
+    } catch {
+      setScheduleRows([]);
+    }
+  }, [selectedTenantId, opsBranchId]);
+
+  const refreshBranches = useCallback(async () => {
+    if (!selectedTenantId) return;
+    if (isDemoTenantId(selectedTenantId)) {
+      const demo = getDemoBranches(selectedTenantId);
+      setBranches(demo);
+      return;
+    }
+    try {
+      const raw = await apiGet<BranchLite[]>(
+        `/guest/branches?tenantId=${encodeURIComponent(selectedTenantId)}`,
+      );
+      setBranches(Array.isArray(raw) ? raw : []);
+    } catch {
+      setBranches([]);
+    }
   }, [selectedTenantId]);
 
+  /**
+   * Rezervasyon ekranı şubeleri.
+   * Demo: paket verisi. API: GET /guest/branches?tenantId=…
+   * tenantId filtre sonucu boşsa API listesine güven (aynı kiracı).
+   */
+  const reserveBranches = useMemo(() => {
+    if (!selectedTenantId) return [];
+    if (isDemoTenantId(selectedTenantId)) {
+      return getDemoBranches(selectedTenantId);
+    }
+    const hasAnyTenantId = branches.some((b) => b.tenantId != null && b.tenantId !== '');
+    if (!hasAnyTenantId) {
+      return branches;
+    }
+    const filtered = branches.filter((b) => b.tenantId === selectedTenantId);
+    return filtered.length > 0 ? filtered : branches;
+  }, [selectedTenantId, branches]);
+
   useEffect(() => {
-    async function loadServicesAndLedger() {
-      if (!selectedTenantId || !guestForm.branchId) return;
-      if (isDemoTenantId(selectedTenantId)) {
-        const rows = getDemoServicesForBranch(selectedTenantId, guestForm.branchId);
+    const ids = new Set(reserveBranches.map((b) => b.id));
+    if (guestForm.branchId && reserveBranches.length > 0 && !ids.has(guestForm.branchId)) {
+      const next = pickDefaultBranchId(reserveBranches);
+      setGuestForm((prev) => ({ ...prev, branchId: next, serviceId: '', staffUserId: '' }));
+    }
+  }, [reserveBranches, guestForm.branchId]);
+
+  useEffect(() => {
+    async function loadCatalogServices() {
+      const catalogBranchId = tab === 'services' ? serviceForm.branchId : guestForm.branchId;
+      if (!selectedTenantId || !catalogBranchId) return;
+      const bundleId = guestDemoBundleTenantId(selectedTenantId, tenants);
+      const useSeedDemoServices =
+        isDemoTenantId(selectedTenantId) || (bundleId != null && guestBranchesAreDemoPack(branches));
+
+      if (useSeedDemoServices && bundleId != null) {
+        const rows = getDemoServicesForBranch(bundleId, catalogBranchId);
         setBranchServices(rows);
         setGuestForm((prev) => {
           const ok = rows.some((s) => s.id === prev.serviceId);
           const nextSid = ok ? prev.serviceId : (rows[0]?.id ?? '');
           if (nextSid === prev.serviceId) return prev;
-          return { ...prev, serviceId: nextSid };
+          return { ...prev, serviceId: nextSid, staffUserId: '' };
         });
       } else {
         try {
-          const rows = await apiGetWithHeaders<ServiceLite[]>(`/services?branchId=${guestForm.branchId}`, { 'x-tenant-id': selectedTenantId });
+          const rows = await apiGetWithHeaders<ServiceLite[]>(
+            `/services?branchId=${catalogBranchId}`,
+            { 'x-tenant-id': selectedTenantId },
+          );
           setBranchServices(rows);
-          if (rows[0] && !guestForm.serviceId) {
-            setGuestForm((prev) => ({ ...prev, serviceId: rows[0].id }));
+          if (tab !== 'services') {
+            setGuestForm((prev) => {
+              const ok = rows.some((s) => s.id === prev.serviceId);
+              const nextSid = ok ? prev.serviceId : (rows[0]?.id ?? '');
+              if (nextSid === prev.serviceId) return prev;
+              return { ...prev, serviceId: nextSid, staffUserId: ok ? prev.staffUserId : '' };
+            });
           }
         } catch {
           setBranchServices([]);
         }
       }
-      const reservationQuery = reservationStatusFilter === 'ALL' ? '' : `?status=${reservationStatusFilter}`;
-      const ledgerQuery = ledgerTypeFilter === 'ALL' ? '' : `?type=${ledgerTypeFilter}`;
-      if (!isDemoTenantId(selectedTenantId)) {
-        try {
-          const ledgerRows = await apiGetWithHeaders<LedgerEntry[]>(`/accounting/ledger${ledgerQuery}`, { 'x-tenant-id': selectedTenantId });
-          setLedger(ledgerRows);
-        } catch {
-          setLedger([]);
-        }
-        try {
-          const reservationRows = await apiGetWithHeaders<ReservationRow[]>(`/employee/reservations${reservationQuery}`, { 'x-tenant-id': selectedTenantId });
-          setReservations(reservationRows);
-        } catch {
-          setReservations([]);
-        }
-        try {
-          const roleRows = await apiGetWithHeaders<RoleRow[]>('/tenants/roles', { 'x-tenant-id': selectedTenantId });
-          setRoles(roleRows);
-        } catch {
-          setRoles([]);
-        }
-      } else {
+    }
+    async function loadLedgerReservationsRoles() {
+      if (!selectedTenantId) return;
+      if (isDemoTenantId(selectedTenantId)) {
         setLedger([]);
         setReservations([]);
         setRoles([]);
+        return;
+      }
+      const reservationQuery = reservationStatusFilter === 'ALL' ? '' : `?status=${reservationStatusFilter}`;
+      const ledgerQuery = ledgerTypeFilter === 'ALL' ? '' : `?type=${ledgerTypeFilter}`;
+      try {
+        const ledgerRows = await apiGetWithHeaders<LedgerEntry[]>(`/accounting/ledger${ledgerQuery}`, { 'x-tenant-id': selectedTenantId });
+        setLedger(ledgerRows);
+      } catch {
+        setLedger([]);
+      }
+      try {
+        const reservationRows = await apiGetWithHeaders<ReservationRow[]>(`/employee/reservations${reservationQuery}`, { 'x-tenant-id': selectedTenantId });
+        setReservations(reservationRows);
+      } catch {
+        setReservations([]);
+      }
+      try {
+        const roleRows = await apiGetWithHeaders<RoleRow[]>('/tenants/roles', { 'x-tenant-id': selectedTenantId });
+        setRoles(roleRows);
+      } catch {
+        setRoles([]);
       }
     }
-    loadServicesAndLedger();
-  }, [selectedTenantId, guestForm.branchId, guestForm.serviceId, reservationStatusFilter, ledgerTypeFilter]);
+    void loadCatalogServices();
+    void loadLedgerReservationsRoles();
+  }, [
+    selectedTenantId,
+    tenants,
+    branches,
+    guestForm.branchId,
+    guestForm.serviceId,
+    serviceForm.branchId,
+    tab,
+    reservationStatusFilter,
+    ledgerTypeFilter,
+  ]);
+
+  useEffect(() => {
+    if (!selectedTenantId || isDemoTenantId(selectedTenantId)) {
+      setTenantUsers([]);
+      return;
+    }
+    if (!['employees', 'managers', 'operations', 'services', 'assignment'].includes(tab)) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const rows = await apiGetWithHeaders<TenantUserRow[]>('/tenants/users', { 'x-tenant-id': selectedTenantId });
+        if (!cancelled) setTenantUsers(rows);
+      } catch {
+        if (!cancelled) setTenantUsers([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTenantId, tab]);
+
+  useEffect(() => {
+    if (branches[0] && !opsBranchId) {
+      setOpsBranchId(branches[0].id);
+    }
+  }, [branches, opsBranchId]);
+
+  useEffect(() => {
+    if (tab !== 'operations' || !selectedTenantId || isDemoTenantId(selectedTenantId) || !opsBranchId) {
+      setScheduleRows([]);
+      return;
+    }
+    void reloadSchedules();
+  }, [tab, selectedTenantId, opsBranchId, reloadSchedules]);
 
   const selectedTenant = tenants.find((x) => x.id === selectedTenantId);
+  const useRestaurantAreas = selectedTenant?.vertical === 'RESTAURANT';
   const actorEmail = selectedTenant ? `owner@${selectedTenant.slug}.com` : 'owner@demo-tenant.com';
+
+  const adminTabDocumentTitle = useMemo(
+    () => ({
+      overview: t.overview,
+      billing: t.billing,
+      operations: t.operations,
+      guests: t.guests,
+      employees: t.employees,
+      managers: t.managers,
+      companyRoles: t.companyRoles,
+      franchiseRoles: t.franchiseRoles,
+      subRoles: t.subRoles,
+      services: t.services,
+      assignment: t.assignment,
+      accounting: t.accounting,
+      saasPlans: t.saasPlans,
+    }),
+    [t],
+  );
+
+  const reloadBranchPricingDays = useCallback(async () => {
+    if (!selectedTenantId || isDemoTenantId(selectedTenantId) || !restaurantPricingForm.branchId) {
+      setBranchPricingDays([]);
+      return;
+    }
+    setBranchPricingDaysLoading(true);
+    try {
+      const rows = await apiGetWithHeaders<BranchPricingDayRow[]>(
+        `/employee/branch-pricing-days?branchId=${encodeURIComponent(restaurantPricingForm.branchId)}`,
+        { 'x-tenant-id': selectedTenantId },
+      );
+      setBranchPricingDays(rows);
+    } catch {
+      setBranchPricingDays([]);
+    } finally {
+      setBranchPricingDaysLoading(false);
+    }
+  }, [selectedTenantId, restaurantPricingForm.branchId]);
+
+  useEffect(() => {
+    if (isAdminPath) {
+      if (!isLoggedIn) {
+        document.title = `${t.loginRequiredTitle} · ${t.appTitle}`;
+        return;
+      }
+      const section = adminTabDocumentTitle[tab];
+      document.title = section ? `${section} · ${t.appTitle}` : t.appTitle;
+      return;
+    }
+    if (location.pathname === '/reserve') {
+      document.title = `${t.reserveSectionTitle} · ${t.appTitle}`;
+      return;
+    }
+    if (location.pathname === '/') {
+      document.title = `${t.publicHeroTitle} · ${t.appTitle}`;
+      return;
+    }
+    document.title = t.appTitle;
+  }, [
+    isAdminPath,
+    isLoggedIn,
+    tab,
+    location.pathname,
+    t.appTitle,
+    t.loginRequiredTitle,
+    t.publicHeroTitle,
+    t.reserveSectionTitle,
+    adminTabDocumentTitle,
+  ]);
+
+  useEffect(() => {
+    if (isAdminPath) return;
+    let meta = document.querySelector('meta[name="description"]');
+    if (!meta) {
+      meta = document.createElement('meta');
+      meta.setAttribute('name', 'description');
+      document.head.appendChild(meta);
+    }
+    const desc =
+      location.pathname === '/reserve' ? t.reserveMetaDescription : t.landingMetaDescription;
+    meta.setAttribute('content', desc);
+  }, [isAdminPath, location.pathname, t.landingMetaDescription, t.reserveMetaDescription]);
+
+  useEffect(() => {
+    if (tab !== 'operations' || !useRestaurantAreas) return;
+    void reloadBranchPricingDays();
+  }, [tab, useRestaurantAreas, reloadBranchPricingDays]);
+
+  useEffect(() => {
+    if (!useRestaurantAreas || branches.length === 0) return;
+    setRestaurantPricingForm((s) =>
+      s.branchId
+        ? s
+        : {
+            ...s,
+            branchId: branches[0].id,
+            dateYmd: s.dateYmd || getDemoSpecialPricingDateYmd(),
+            label: s.label || (lang === 'tr' ? 'Önemli gün' : 'Special day'),
+          },
+    );
+  }, [useRestaurantAreas, branches, lang]);
+
+  useEffect(() => {
+    if (!isAdminPath || tab !== 'billing' || devProfile === 'superAdmin') {
+      setTenantBilling(null);
+      return;
+    }
+    if (!selectedTenant?.slug) return;
+    let cancelled = false;
+    setBillingTabLoading(true);
+    void (async () => {
+      try {
+        const data = await apiGet<TenantBillingPayload>(
+          `/saas/tenant-billing?tenantSlug=${encodeURIComponent(selectedTenant.slug)}`,
+        );
+        if (!cancelled) setTenantBilling(data);
+      } catch {
+        if (!cancelled) setTenantBilling(null);
+      } finally {
+        if (!cancelled) setBillingTabLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdminPath, tab, devProfile, selectedTenant?.slug]);
+
+  useEffect(() => {
+    if (!isAdminPath || tab !== 'overview' || devProfile === 'superAdmin') {
+      setTenantOverview(null);
+      return;
+    }
+    if (!selectedTenant?.slug) return;
+    let cancelled = false;
+    setOverviewTenantLoading(true);
+    void (async () => {
+      try {
+        const data = await apiGet<TenantOverviewPayload>(
+          `/saas/tenant-overview?tenantSlug=${encodeURIComponent(selectedTenant.slug)}`,
+        );
+        if (!cancelled) setTenantOverview(data);
+      } catch {
+        if (!cancelled) setTenantOverview(null);
+      } finally {
+        if (!cancelled) setOverviewTenantLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdminPath, tab, devProfile, selectedTenant?.slug]);
 
   const slotGroups = useMemo(() => groupSlotsByPeriod(availability), [availability]);
 
   const bookingStep = useMemo(() => {
     if (!guestForm.branchId) return 1;
     if (!guestForm.serviceId) return 2;
-    if (!guestForm.date) return 3;
+    if (!guestForm.date || !pendingSlot) return 3;
     return 4;
-  }, [guestForm.branchId, guestForm.serviceId, guestForm.date]);
+  }, [guestForm.branchId, guestForm.serviceId, guestForm.date, pendingSlot]);
 
-  const handleBookSlotPublic = useCallback(
-    async (slot: AvailabilitySlot) => {
-      if (!selectedTenantId) return;
-      if (!guestForm.customerName.trim() || !guestForm.customerPhone.trim()) {
-        setActionMessage(t.invalidForm);
+  useEffect(() => {
+    setPendingSlot(null);
+  }, [guestForm.branchId, guestForm.serviceId, guestForm.date, guestForm.staffUserId]);
+
+  useEffect(() => {
+    if (!pendingSlot || slotsLoading) return;
+    const stillThere = availability.some(
+      (s) => s.startsAt === pendingSlot.startsAt && s.staffUserId === pendingSlot.staffUserId,
+    );
+    if (!stillThere) setPendingSlot(null);
+  }, [availability, pendingSlot, slotsLoading]);
+
+  const isSlotSelected = useCallback(
+    (slot: AvailabilitySlot) =>
+      pendingSlot?.startsAt === slot.startsAt && pendingSlot?.staffUserId === slot.staffUserId,
+    [pendingSlot],
+  );
+
+  const pickPublicSlot = useCallback((slot: AvailabilitySlot) => {
+    setPendingSlot((prev) => {
+      const same = prev?.startsAt === slot.startsAt && prev?.staffUserId === slot.staffUserId;
+      if (same) return null;
+      queueMicrotask(() => {
         document.getElementById('booking-contact')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        return;
-      }
-      if (isDemoTenantId(selectedTenantId)) {
+      });
+      return slot;
+    });
+  }, []);
+
+  const submitReservationRequest = useCallback(async () => {
+    if (!selectedTenantId) return;
+    const slot = pendingSlot;
+    if (!slot) {
+      setActionMessage(t.reserveSelectSlotFirst);
+      document.getElementById('reserve-step-3')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+    if (!guestForm.customerName.trim() || !guestForm.customerPhone.trim()) {
+      setActionMessage(t.invalidForm);
+      document.getElementById('booking-contact')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      return;
+    }
+    setReservationSubmitting(true);
+    try {
+      const bundleId = guestDemoBundleTenantId(selectedTenantId, tenants);
+      const simulateDemoSuccess =
+        isDemoTenantId(selectedTenantId) || (bundleId != null && guestBranchesAreDemoPack(branches));
+      if (simulateDemoSuccess) {
         setActionMessage(`${t.reserveSuccess} ${demoReservationSuccessMessage(lang)}`);
         setCustomerNotifs((prev) => [
           {
@@ -816,50 +1523,84 @@ export function App() {
         ]);
         return;
       }
-      try {
-        await apiPost(
-          '/guest/reservations',
-          {
-            branchId: guestForm.branchId,
-            customerName: guestForm.customerName,
-            customerPhone: guestForm.customerPhone,
-            customerEmail: guestForm.customerEmail.trim() || undefined,
-            serviceId: guestForm.serviceId,
-            staffUserId: slot.staffUserId,
-            createdByEmail: actorEmail,
-            startsAt: slot.startsAt,
-          },
+      await apiPost(
+        '/guest/reservations',
+        {
+          branchId: guestForm.branchId,
+          customerName: guestForm.customerName,
+          customerPhone: guestForm.customerPhone,
+          customerEmail: guestForm.customerEmail.trim() || undefined,
+          serviceId: guestForm.serviceId,
+          staffUserId: slot.staffUserId,
+          createdByEmail: actorEmail,
+          startsAt: slot.startsAt,
+        },
+        { 'x-tenant-id': selectedTenantId },
+      );
+      setActionMessage(t.reserveSuccess);
+      const nq = new URLSearchParams();
+      if (guestForm.customerPhone) nq.set('phone', guestForm.customerPhone);
+      if (guestForm.customerEmail) nq.set('email', guestForm.customerEmail.trim().toLowerCase());
+      if (guestForm.customerPhone || guestForm.customerEmail) {
+        const rows = await apiGetWithHeaders<NotificationRow[]>(
+          `/guest/customer-notifications?${nq.toString()}`,
           { 'x-tenant-id': selectedTenantId },
         );
-        setActionMessage(t.reserveSuccess);
-        const nq = new URLSearchParams();
-        if (guestForm.customerPhone) nq.set('phone', guestForm.customerPhone);
-        if (guestForm.customerEmail) nq.set('email', guestForm.customerEmail.trim().toLowerCase());
-        if (guestForm.customerPhone || guestForm.customerEmail) {
-          const rows = await apiGetWithHeaders<NotificationRow[]>(
-            `/guest/customer-notifications?${nq.toString()}`,
-            { 'x-tenant-id': selectedTenantId },
-          );
-          setCustomerNotifs(rows);
-        }
-      } catch {
-        setActionMessage(t.reserveFail);
+        setCustomerNotifs(rows);
       }
-    },
-    [
-      selectedTenantId,
-      actorEmail,
-      lang,
-      guestForm.branchId,
-      guestForm.customerName,
-      guestForm.customerPhone,
-      guestForm.customerEmail,
-      guestForm.serviceId,
-      t.reserveSuccess,
-      t.reserveFail,
-      t.invalidForm,
-    ],
-  );
+    } catch {
+      setActionMessage(t.reserveFail);
+    } finally {
+      setReservationSubmitting(false);
+    }
+  }, [
+    selectedTenantId,
+    tenants,
+    branches,
+    actorEmail,
+    lang,
+    pendingSlot,
+    guestForm.branchId,
+    guestForm.customerName,
+    guestForm.customerPhone,
+    guestForm.customerEmail,
+    guestForm.serviceId,
+    t.reserveSuccess,
+    t.reserveFail,
+    t.invalidForm,
+    t.reserveSelectSlotFirst,
+  ]);
+
+  const publicReserveSummary = useMemo(() => {
+    const br = reserveBranches.find((b) => b.id === guestForm.branchId);
+    const svc = branchServices.find((s) => s.id === guestForm.serviceId);
+    const dateFmt = guestForm.date
+      ? new Date(`${guestForm.date}T12:00:00`).toLocaleDateString(lang === 'tr' ? 'tr-TR' : 'en-US', {
+          weekday: 'short',
+          day: 'numeric',
+          month: 'short',
+        })
+      : '';
+    const timeFmt = pendingSlot
+      ? new Date(pendingSlot.startsAt).toLocaleTimeString(lang === 'tr' ? 'tr-TR' : 'en-US', { hour: '2-digit', minute: '2-digit' })
+      : '';
+    return {
+      branchName: br?.name ?? '',
+      serviceName: svc?.name ?? '',
+      serviceMeta: svc ? `${svc.durationMin}′ · ₺${svc.priceAmount} ${svc.currency}` : '',
+      dateFmt,
+      timeFmt,
+      staffName: pendingSlot?.staffName ?? '',
+    };
+  }, [reserveBranches, branchServices, guestForm.branchId, guestForm.serviceId, guestForm.date, pendingSlot, lang]);
+
+  const applyPriceHint = (baseNum: number) => {
+    if (!pricingHint?.hasRule) return Math.round(baseNum);
+    let n = baseNum;
+    if (pricingHint.surchargePercent != null) n *= 1 + pricingHint.surchargePercent / 100;
+    if (pricingHint.extraAmount != null) n += Number(pricingHint.extraAmount);
+    return Math.round(n);
+  };
 
   const profileLabel: Record<DevProfile, string> = {
     superAdmin: t.superAdminProfile,
@@ -872,10 +1613,23 @@ export function App() {
     () => Array.from(new Map(availability.map((slot) => [slot.staffUserId, { id: slot.staffUserId, name: slot.staffName }])).values()),
     [availability],
   );
+  const staffUserOptions = useMemo(
+    () => tenantUsers.filter((u) => u.isStaff).map((u) => ({ id: u.id, name: u.fullName })),
+    [tenantUsers],
+  );
+  const opsStaffSelect = useMemo(() => {
+    if (selectedTenantId && isDemoTenantId(selectedTenantId)) return staffOptions;
+    return staffUserOptions.length > 0 ? staffUserOptions : staffOptions;
+  }, [selectedTenantId, staffOptions, staffUserOptions]);
   const canApprove = (status: string) => status === 'PENDING';
   const canStart = (status: string) => status === 'CONFIRMED';
   const canComplete = (status: string) => status === 'IN_PROGRESS';
+  const canCancelReservation = (status: string) => status === 'PENDING' || status === 'CONFIRMED';
   const selectedPlan = plans.find((p) => p.code === onboardForm.planCode) ?? plans[0];
+  const purchasePlan = useMemo(
+    () => (purchaseContext ? plans.find((p) => p.code === purchaseContext.planCode) : undefined),
+    [plans, purchaseContext],
+  );
   const heroSlides = [
     {
       image: '/images/hero-main.jpg',
@@ -914,8 +1668,9 @@ export function App() {
       setPublicNavOpen(false);
     };
 
+    const applyReturnPath = location.pathname === '/app/showcase' ? '/app/showcase' : '/apply';
+
     const activeHero = heroSlides[activeSlide];
-    const featuredPlanIdx = plans.length ? Math.floor((plans.length - 1) / 2) : 0;
     const footerYear = new Date().getFullYear();
     const serviceItems = [
       { Icon: CalendarClock, title: t.landingSvc1t, desc: t.landingSvc1d },
@@ -957,11 +1712,19 @@ export function App() {
               <button type="button" className="ghostBtn" onClick={() => goPublic('/#services')}>{t.navServices}</button>
               <button type="button" className="ghostBtn" onClick={() => goPublic('/#pricing')}>{t.navPricing}</button>
               <button type="button" className="ghostBtn" onClick={() => goPublic('/#references')}>{t.navReferences}</button>
-              <button type="button" className="ghostBtn" onClick={() => goPublic('/reserve')}>{t.navReserve}</button>
-              <button type="button" className="ghostBtn" onClick={() => goPublic('/apply')}>{t.navApply}</button>
+              <button type="button" className="ghostBtn" onClick={() => goPublic('/app/showcase')}>{t.navApply}</button>
               <button type="button" className="ghostBtn" onClick={() => goPublic('/#faq')}>{t.navFaq}</button>
             </nav>
             <div className="publicHeaderEnd">
+              <button
+                type="button"
+                className="primaryBtn publicReserveCta"
+                onClick={() => goPublic('/reserve')}
+                aria-label={t.navReserve}
+              >
+                <CalendarClock size={18} strokeWidth={2} aria-hidden />
+                <span className="publicReserveCtaLabel">{t.navReserve}</span>
+              </button>
               <details className="publicRolePanel">
                 <summary className="publicRoleSummary">{t.panelLogin}</summary>
                 <div className="publicRoleList">
@@ -1002,8 +1765,12 @@ export function App() {
                         {t.landingHeroCtaPrimary}
                         <ArrowRight size={18} aria-hidden />
                       </button>
-                      <button type="button" className="landingBtn landingBtnGhost" onClick={() => goPublic('/apply')}>
+                      <button type="button" className="landingBtn landingBtnGhost" onClick={() => goPublic('/app/showcase')}>
                         {t.landingHeroCtaSecondary}
+                      </button>
+                      <button type="button" className="landingBtn landingBtnOutline landingBtnOnDark" onClick={() => goPublic('/reserve')}>
+                        <CalendarClock size={18} aria-hidden />
+                        {t.landingHeroCtaReserve}
                       </button>
                     </div>
                     <p className="landingHeroTrust">{t.landingTrustLine}</p>
@@ -1054,6 +1821,13 @@ export function App() {
                     </article>
                   ))}
                 </div>
+                <div className="landingSectionCta">
+                  <button type="button" className="landingBtn landingBtnPrimary" onClick={() => goPublic('/reserve')}>
+                    <CalendarClock size={18} aria-hidden />
+                    {t.landingServiceCtaReserve}
+                    <ArrowRight size={18} aria-hidden />
+                  </button>
+                </div>
               </section>
 
               <section className="landingSection landingSectionAlt">
@@ -1078,9 +1852,9 @@ export function App() {
                   <p className="landingLead">{t.landingPricingLead}</p>
                 </div>
                 <div className="landingPricingGrid">
-                  {plans.map((plan, idx) => {
+                  {visiblePlans.map((plan, idx) => {
                     const lines = planFeatureLines(plan, t);
-                    const featured = plan.badgeLabel ? plan.badgeLabel.includes('En çok') || plan.badgeLabel.toLowerCase().includes('popular') : idx === featuredPlanIdx;
+                    const featured = plan.badgeLabel ? plan.badgeLabel.includes('En çok') || plan.badgeLabel.toLowerCase().includes('popular') : idx === applyFeaturedPlanIdx;
                     return (
                       <article
                         key={plan.code}
@@ -1092,6 +1866,9 @@ export function App() {
                           <span className="landingPriceBadge">{t.landingPlanPopular}</span>
                         ) : null}
                         <h3 className="landingPriceName">{plan.name}</h3>
+                        <p className="landingPriceSku">
+                          <code>{plan.code}</code>
+                        </p>
                         {plan.description ? <p className="landingPriceDesc">{plan.description}</p> : null}
                         <p className="landingPriceAmount">
                           <span className="landingPriceCurrency">₺</span>
@@ -1125,7 +1902,7 @@ export function App() {
                           className={featured ? 'landingBtn landingBtnPrimary landingBtnBlock' : 'landingBtn landingBtnOutline landingBtnBlock'}
                           onClick={() => {
                             setOnboardForm((s) => ({ ...s, planCode: plan.code }));
-                            goPublic(`/apply?plan=${encodeURIComponent(plan.code)}`);
+                            goPublic(`/app/showcase?plan=${encodeURIComponent(plan.code)}`);
                           }}
                         >
                           {t.startWithPlan}
@@ -1255,7 +2032,7 @@ export function App() {
                   <h2 className="landingCtaTitle">{t.landingCtaTitle}</h2>
                   <p className="landingCtaLead">{t.landingCtaLead}</p>
                   <div className="landingCtaActions">
-                    <button type="button" className="landingBtn landingBtnOnDark" onClick={() => goPublic('/#pricing')}>
+                    <button type="button" className="landingBtn landingBtnOnDark" onClick={() => goPublic('/app/showcase')}>
                       {t.landingCtaButton}
                     </button>
                     <button type="button" className="landingBtn landingBtnGhostOnDark" onClick={() => goPublic('/reserve')}>
@@ -1279,7 +2056,8 @@ export function App() {
                   </div>
                   <div>
                     <p className="landingFooterColTitle">{t.landingFooterCompany}</p>
-                    <button type="button" className="landingFooterLink" onClick={() => goPublic('/apply')}>{t.navApply}</button>
+                    <button type="button" className="landingFooterLink" onClick={() => goPublic('/app/overview')}>{t.openAdmin}</button>
+                    <button type="button" className="landingFooterLink" onClick={() => goPublic('/app/showcase')}>{t.navApply}</button>
                     <button type="button" className="landingFooterLink" onClick={() => goPublic('/#faq')}>{t.navFaq}</button>
                     <p className="landingFooterNote">{t.landingFooterContact}</p>
                   </div>
@@ -1291,46 +2069,104 @@ export function App() {
         ) : null}
 
         {location.pathname === '/reserve' ? (
-          <div className="publicContent publicPagePad publicReserve">
-            {isDemoTenantId(selectedTenantId) ? (
-              <div className="reserveDemoBanner" role="status">
-                <strong>Demo</strong>
-                <span>{t.demoDataBanner}</span>
+          <div className="reservePageShell">
+            <div className="reservePageHeroBand">
+              <div className="reservePageInner">
+                {isDemoTenantId(selectedTenantId) ? (
+                  <div className="reserveDemoBanner" role="status">
+                    <strong>Demo</strong>
+                    <span>{t.demoDataBanner}</span>
+                  </div>
+                ) : null}
+                <header className="reserveHero">
+                  <div className="reserveHeroTop">
+                    <button type="button" className="reserveBackHome" onClick={() => goPublic('/')}>
+                      <ChevronLeft size={18} aria-hidden />
+                      {t.reserveBackHome}
+                    </button>
+                  </div>
+                  <h3 className="reserveFlowTitle">
+                    <CalendarClock className="reserveHeroTitleGlyph" size={28} strokeWidth={1.75} aria-hidden />
+                    <span>{t.reserveSectionTitle}</span>
+                  </h3>
+                  <p className="muted reserveHeroLead">{t.reserveHeroLead}</p>
+                  <p className="reserveSlotsAutoHint">{t.reserveSlotsAuto}</p>
+                </header>
               </div>
-            ) : null}
-            <section className="card reserveCard reserveFlow">
-              <nav className="reserveStepper" aria-label="booking steps">
-                {[
-                  { step: 1, label: t.reserveStep1, target: 'reserve-step-1' },
-                  { step: 2, label: t.reserveStep2, target: 'reserve-step-2' },
-                  { step: 3, label: t.reserveStep3, target: 'reserve-step-3' },
-                  { step: 4, label: t.reserveStep4, target: 'booking-contact' },
-                ].map(({ step, label, target }) => (
-                  <button
-                    key={target}
-                    type="button"
-                    className={`reserveStepPill ${bookingStep >= step ? 'isReached' : ''} ${bookingStep === step ? 'isActive' : ''}`}
-                    onClick={() => document.getElementById(target)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-                  >
-                    <span className="reserveStepPillNum">{step}</span>
-                    <span className="reserveStepPillLabel">{label}</span>
-                  </button>
-                ))}
-              </nav>
+            </div>
 
-              <h3 className="reserveFlowTitle">{t.reserveSectionTitle}</h3>
-              <p className="muted reserveFlowLead">{t.reserveFlowHint}</p>
-              <p className="muted reserveFlowLead">{t.selectStaffHint}</p>
-              <p className="reserveSlotsAutoHint">{t.reserveSlotsAuto}</p>
+            <div className="reservePageMain reserveFlow reserveFlow--public">
+              <div className="reservePageStickyWrap">
+                <div className="reservePageInner">
+                  <div className="reserveStickyBar">
+                <nav className="reserveStepper" aria-label="booking steps">
+                  {[
+                    { step: 1, label: t.reserveStep1, target: 'reserve-step-1' },
+                    { step: 2, label: t.reserveStep2, target: 'reserve-step-2' },
+                    { step: 3, label: t.reserveStep3, target: 'reserve-step-3' },
+                    { step: 4, label: t.reserveStep4, target: 'booking-contact' },
+                  ].map(({ step, label, target }) => (
+                    <button
+                      key={target}
+                      type="button"
+                      className={`reserveStepPill ${bookingStep >= step ? 'isReached' : ''} ${bookingStep === step ? 'isActive' : ''}`}
+                      onClick={() => document.getElementById(target)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                    >
+                      <span className="reserveStepPillNum">{step}</span>
+                      <span className="reserveStepPillLabel">{label}</span>
+                    </button>
+                  ))}
+                </nav>
 
-              <div id="reserve-step-1" className="reserveBlock">
+                <div className="reserveLiveSummary" aria-live="polite">
+                  <div className="reserveLiveSummaryHead">
+                    <span className="reserveLiveSummaryTitle">{t.reserveSummaryTitle}</span>
+                    <span className="reserveLiveSummaryTenant">{selectedTenant?.name ?? '—'}</span>
+                  </div>
+                  <div className="reserveLiveSummaryGrid">
+                    <div className="reserveLiveSummaryCell">
+                      <span className="reserveLiveSummaryLbl">{t.selectBranch}</span>
+                      <span className="reserveLiveSummaryVal">{publicReserveSummary.branchName || '—'}</span>
+                    </div>
+                    <div className="reserveLiveSummaryCell">
+                      <span className="reserveLiveSummaryLbl">{t.selectService}</span>
+                      <span className="reserveLiveSummaryVal">{publicReserveSummary.serviceName || '—'}</span>
+                    </div>
+                    <div className="reserveLiveSummaryCell">
+                      <span className="reserveLiveSummaryLbl">{t.selectDate}</span>
+                      <span className="reserveLiveSummaryVal">{publicReserveSummary.dateFmt || '—'}</span>
+                    </div>
+                    <div className="reserveLiveSummaryCell">
+                      <span className="reserveLiveSummaryLbl">{t.reservePickSlot}</span>
+                      <span className="reserveLiveSummaryVal">
+                        {pendingSlot ? `${publicReserveSummary.timeFmt} · ${publicReserveSummary.staffName}` : '—'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+                  <p className="reserveUxTip muted">{t.reserveUxTip}</p>
+                </div>
+              </div>
+
+              <div className="reservePageStepList">
+                <div className="reservePageInner">
+              <div id="reserve-step-1" className="reserveBlock reserveSectionCard reserveSectionCard--branch">
                 <h4 className="reserveBlockTitle">
+                  <span className="reserveBlockIcon reserveBlockIcon--branch" aria-hidden>
+                    <Building2 size={22} strokeWidth={1.85} />
+                  </span>
                   <span className="reserveBlockNum">1</span>
                   {t.reserveStep1}
                 </h4>
                 <label className="reserveLabel">
                   {t.selectTenant}
-                  <select value={selectedTenantId} onChange={(e) => setSelectedTenantId(e.target.value)}>
+                  <select
+                    className="reserveTenantSelect"
+                    value={selectedTenantId}
+                    onChange={(e) => setSelectedTenantId(e.target.value)}
+                  >
                     {tenants.map((tenant) => (
                       <option key={tenant.id} value={tenant.id}>
                         {tenant.name}
@@ -1340,23 +2176,33 @@ export function App() {
                 </label>
                 <p className="reserveBlockSub">{t.selectBranch}</p>
                 <div className="reserveBranchGrid">
-                  {branches.map((b) => (
-                    <button
-                      key={b.id}
-                      type="button"
-                      className={`reserveBranchCard ${guestForm.branchId === b.id ? 'isSelected' : ''}`}
-                      onClick={() => setGuestForm((s) => ({ ...s, branchId: b.id, staffUserId: '' }))}
-                    >
-                      <Building2 size={22} aria-hidden />
-                      <span className="reserveBranchName">{b.name}</span>
-                      <span className="reserveBranchCode">{b.code}</span>
-                    </button>
-                  ))}
+                  {reserveBranches.length === 0 ? (
+                    <p className="muted reserveBranchEmpty">{t.reserveNoBranches}</p>
+                  ) : (
+                    reserveBranches.map((b) => (
+                      <button
+                        key={b.id}
+                        type="button"
+                        className={`reserveBranchCard ${guestForm.branchId === b.id ? 'isSelected' : ''}`}
+                        onClick={() => setGuestForm((s) => ({ ...s, branchId: b.id, staffUserId: '', serviceId: '' }))}
+                      >
+                        <Building2 size={22} aria-hidden />
+                        <span className="reserveBranchName">{b.name}</span>
+                        <span className="reserveBranchCode">
+                          {b.code}
+                          {b.code?.toUpperCase() === 'HQ' ? <span className="reserveBranchHqBadge">{t.mainBranchBadge}</span> : null}
+                        </span>
+                      </button>
+                    ))
+                  )}
                 </div>
               </div>
 
-              <div id="reserve-step-2" className="reserveBlock">
+              <div id="reserve-step-2" className="reserveBlock reserveSectionCard reserveSectionCard--service">
                 <h4 className="reserveBlockTitle">
+                  <span className="reserveBlockIcon reserveBlockIcon--service" aria-hidden>
+                    <BriefcaseBusiness size={22} strokeWidth={1.85} />
+                  </span>
                   <span className="reserveBlockNum">2</span>
                   {t.reserveStep2}
                 </h4>
@@ -1368,22 +2214,48 @@ export function App() {
                       className={`reserveServiceCard ${guestForm.serviceId === s.id ? 'isSelected' : ''}`}
                       onClick={() => setGuestForm((prev) => ({ ...prev, serviceId: s.id }))}
                     >
+                      <span className="reserveServiceCardIcon" aria-hidden>
+                        <Sparkles size={18} strokeWidth={1.85} />
+                      </span>
                       <span className="reserveServiceName">{s.name}</span>
                       {s.category?.name ? <span className="reserveServiceCat">{s.category.name}</span> : null}
                       <span className="reserveServiceMeta">
-                        {s.durationMin}′ · ₺{s.priceAmount} {s.currency}
+                        {useRestaurantAreas && pricingHint?.hasRule ? (
+                          <>
+                            {s.durationMin}′ ·{' '}
+                            <span className="reserveStrike">₺{s.priceAmount}</span>{' '}
+                            <strong>₺{applyPriceHint(Number(s.priceAmount))}</strong> {s.currency}
+                            {pricingHint.label ? (
+                              <span className="reservePricingBadge" title={pricingHint.note ?? ''}>
+                                {pricingHint.label}
+                              </span>
+                            ) : null}
+                          </>
+                        ) : (
+                          <>
+                            {s.durationMin}′ · ₺{s.priceAmount} {s.currency}
+                          </>
+                        )}
                       </span>
                     </button>
                   ))}
                 </div>
               </div>
 
-              <div id="reserve-step-3" className="reserveBlock">
+              <div id="reserve-step-3" className="reserveBlock reserveSectionCard reserveSectionCard--datetime">
                 <h4 className="reserveBlockTitle">
+                  <span className="reserveBlockIcon reserveBlockIcon--datetime" aria-hidden>
+                    <Calendar size={22} strokeWidth={1.85} />
+                  </span>
                   <span className="reserveBlockNum">3</span>
                   {t.reserveStep3}
                 </h4>
-                <p className="reserveShiftHint">{t.shiftBreak}</p>
+                <p className="reserveShiftHint">{useRestaurantAreas ? t.restaurantAreaShiftHint : t.shiftBreak}</p>
+                <div className="reserveSubCard reserveSubCard--calendar">
+                  <div className="reserveSubCardHead">
+                    <CalendarClock size={18} aria-hidden />
+                    <span>{t.reserveCalendarWeek}</span>
+                  </div>
                 <div className="reserveWeekNav">
                   <button
                     type="button"
@@ -1419,15 +2291,20 @@ export function App() {
                   {t.selectDate}
                   <input type="date" value={guestForm.date} onChange={(e) => setGuestForm((s) => ({ ...s, date: e.target.value }))} />
                 </label>
+                </div>
 
-                <p className="reserveStaffPickTitle">{t.chooseStaff}</p>
-                <div className="reserveStaffChips" role="group" aria-label={t.chooseStaff}>
+                <div className="reserveSubCard reserveSubCard--staff">
+                  <div className="reserveSubCardHead">
+                    <Users size={18} aria-hidden />
+                    <span>{useRestaurantAreas ? t.chooseRestaurantArea : t.chooseStaff}</span>
+                  </div>
+                <div className="reserveStaffChips" role="group" aria-label={useRestaurantAreas ? t.chooseRestaurantArea : t.chooseStaff}>
                   <button
                     type="button"
                     className={`reserveStaffChip ${guestForm.staffUserId === '' ? 'isSelected' : ''}`}
                     onClick={() => setGuestForm((s) => ({ ...s, staffUserId: '' }))}
                   >
-                    {t.anyStaff}
+                    {useRestaurantAreas ? t.anyRestaurantArea : t.anyStaff}
                   </button>
                   {staffCalendar.map((row) => (
                     <button
@@ -1442,36 +2319,43 @@ export function App() {
                     </button>
                   ))}
                 </div>
-
-                <h5 className="reserveSubheading">{t.staffCalendar}</h5>
-                <div className="reserveStaffDetailGrid">
-                  {staffCalendar.map((row) => (
-                    <div key={row.staffUserId} className={`reserveStaffDetailCard ${row.offDay ? 'isOff' : ''}`}>
-                      <UserCircle2 className="reserveStaffAvatar" size={36} aria-hidden />
-                      <div className="reserveStaffDetailBody">
-                        <div className="reserveStaffDetailName">{row.staffName}</div>
-                        <div className="reserveShiftTimes">
-                          {row.shifts.length > 0
-                            ? row.shifts
-                                .map((sh) => `${new Date(sh.startsAt).toLocaleTimeString(lang === 'tr' ? 'tr-TR' : 'en-US', { hour: '2-digit', minute: '2-digit' })}–${new Date(sh.endsAt).toLocaleTimeString(lang === 'tr' ? 'tr-TR' : 'en-US', { hour: '2-digit', minute: '2-digit' })}`)
-                                .join(' · ')
-                            : '—'}
-                        </div>
-                        <div className="reserveStaffStats">
-                          <span>
-                            {t.booked}: <strong>{row.bookedCount}</strong>
-                          </span>
-                          <span>
-                            {t.free}: <strong>{row.freeCount}</strong>
-                          </span>
-                        </div>
-                      </div>
-                      <span className={`reserveOffBadge ${row.offDay ? 'isOff' : ''}`}>{row.offDay ? t.offDay : t.active}</span>
-                    </div>
-                  ))}
-                  {staffCalendar.length === 0 ? <p className="muted">{t.noRecords}</p> : null}
                 </div>
 
+                <details className="reserveStaffDetails">
+                  <summary className="reserveStaffDetailsSummary">
+                    {useRestaurantAreas ? t.restaurantAreaDetailsToggle : t.reserveStaffCalendarToggle}
+                  </summary>
+                  <h5 className="reserveSubheading">{useRestaurantAreas ? t.restaurantAreaCalendar : t.staffCalendar}</h5>
+                  <div className="reserveStaffDetailGrid">
+                    {staffCalendar.map((row) => (
+                      <div key={row.staffUserId} className={`reserveStaffDetailCard ${row.offDay ? 'isOff' : ''}`}>
+                        <UserCircle2 className="reserveStaffAvatar" size={36} aria-hidden />
+                        <div className="reserveStaffDetailBody">
+                          <div className="reserveStaffDetailName">{row.staffName}</div>
+                          <div className="reserveShiftTimes">
+                            {row.shifts.length > 0
+                              ? row.shifts
+                                  .map((sh) => `${new Date(sh.startsAt).toLocaleTimeString(lang === 'tr' ? 'tr-TR' : 'en-US', { hour: '2-digit', minute: '2-digit' })}–${new Date(sh.endsAt).toLocaleTimeString(lang === 'tr' ? 'tr-TR' : 'en-US', { hour: '2-digit', minute: '2-digit' })}`)
+                                  .join(' · ')
+                              : '—'}
+                          </div>
+                          <div className="reserveStaffStats">
+                            <span>
+                              {t.booked}: <strong>{row.bookedCount}</strong>
+                            </span>
+                            <span>
+                              {t.free}: <strong>{row.freeCount}</strong>
+                            </span>
+                          </div>
+                        </div>
+                        <span className={`reserveOffBadge ${row.offDay ? 'isOff' : ''}`}>{row.offDay ? t.offDay : t.active}</span>
+                      </div>
+                    ))}
+                    {staffCalendar.length === 0 ? <p className="muted">{t.noRecords}</p> : null}
+                  </div>
+                </details>
+
+                <div className="reserveSubCard reserveSubCard--slots">
                 <div className="reserveSlotPanel">
                   <div className="reserveSlotPanelHead">
                     <div className="reserveSlotPanelTitle">
@@ -1483,6 +2367,7 @@ export function App() {
                       {t.reserveRefreshSlots}
                     </button>
                   </div>
+                  <p className="reservePickSlotHint">{t.reservePickSlotHint}</p>
                   {slotsLoading ? <p className="reserveSlotsLoading">{t.reserveSlotsLoading}</p> : null}
                   {!slotsLoading && availability.length === 0 && guestForm.branchId && guestForm.serviceId && guestForm.date ? (
                     <p className="muted">{t.noRecords}</p>
@@ -1496,8 +2381,8 @@ export function App() {
                           <button
                             type="button"
                             key={`m-${slot.staffUserId}-${slot.startsAt}`}
-                            className="reserveSlotChip"
-                            onClick={() => void handleBookSlotPublic(slot)}
+                            className={`reserveSlotChip ${isSlotSelected(slot) ? 'isSelected' : ''}`}
+                            onClick={() => pickPublicSlot(slot)}
                           >
                             <span className="reserveSlotTime">
                               {new Date(slot.startsAt).toLocaleTimeString(lang === 'tr' ? 'tr-TR' : 'en-US', { hour: '2-digit', minute: '2-digit' })}
@@ -1516,8 +2401,8 @@ export function App() {
                           <button
                             type="button"
                             key={`a-${slot.staffUserId}-${slot.startsAt}`}
-                            className="reserveSlotChip"
-                            onClick={() => void handleBookSlotPublic(slot)}
+                            className={`reserveSlotChip ${isSlotSelected(slot) ? 'isSelected' : ''}`}
+                            onClick={() => pickPublicSlot(slot)}
                           >
                             <span className="reserveSlotTime">
                               {new Date(slot.startsAt).toLocaleTimeString(lang === 'tr' ? 'tr-TR' : 'en-US', { hour: '2-digit', minute: '2-digit' })}
@@ -1536,8 +2421,8 @@ export function App() {
                           <button
                             type="button"
                             key={`e-${slot.staffUserId}-${slot.startsAt}`}
-                            className="reserveSlotChip"
-                            onClick={() => void handleBookSlotPublic(slot)}
+                            className={`reserveSlotChip ${isSlotSelected(slot) ? 'isSelected' : ''}`}
+                            onClick={() => pickPublicSlot(slot)}
                           >
                             <span className="reserveSlotTime">
                               {new Date(slot.startsAt).toLocaleTimeString(lang === 'tr' ? 'tr-TR' : 'en-US', { hour: '2-digit', minute: '2-digit' })}
@@ -1549,75 +2434,150 @@ export function App() {
                     </div>
                   ) : null}
                 </div>
+                </div>
               </div>
 
-              <div id="booking-contact" className="reserveBlock">
+              <div id="booking-contact" className="reserveBlock reserveSectionCard reserveSectionCard--contact reserveRequestBlock">
                 <h4 className="reserveBlockTitle">
+                  <span className="reserveBlockIcon reserveBlockIcon--contact" aria-hidden>
+                    <Send size={22} strokeWidth={1.85} />
+                  </span>
                   <span className="reserveBlockNum">4</span>
-                  {t.reserveContactTitle}
+                  {t.reserveRequestTitle}
                 </h4>
+                <div className="reserveRequestSummary" aria-live="polite">
+                  <p className="reserveRequestSummaryTitle">{t.reserveSummaryTitle}</p>
+                  <ul className="reserveRequestSummaryList">
+                    <li>
+                      <span className="reserveRequestSummaryKey">{t.selectTenant}</span>
+                      <span className="reserveRequestSummaryVal">{selectedTenant?.name ?? '—'}</span>
+                    </li>
+                    <li>
+                      <span className="reserveRequestSummaryKey">{t.selectBranch}</span>
+                      <span className="reserveRequestSummaryVal">{publicReserveSummary.branchName || '—'}</span>
+                    </li>
+                    <li>
+                      <span className="reserveRequestSummaryKey">{t.selectService}</span>
+                      <span className="reserveRequestSummaryVal">
+                        {publicReserveSummary.serviceName ? `${publicReserveSummary.serviceName} (${publicReserveSummary.serviceMeta})` : '—'}
+                      </span>
+                    </li>
+                    <li>
+                      <span className="reserveRequestSummaryKey">{t.selectDate}</span>
+                      <span className="reserveRequestSummaryVal">{publicReserveSummary.dateFmt || '—'}</span>
+                    </li>
+                    <li>
+                      <span className="reserveRequestSummaryKey">{t.reservePickSlot}</span>
+                      <span className="reserveRequestSummaryVal">
+                        {pendingSlot ? `${publicReserveSummary.timeFmt} · ${publicReserveSummary.staffName}` : '—'}
+                      </span>
+                    </li>
+                  </ul>
+                </div>
+
+                <div className="reserveFormCenter">
+                <p className="reserveContactSectionLabel">{t.reserveContactTitle}</p>
                 <div className="formGrid reserveContactGrid">
-                  <label className="reserveLabel">
-                    {t.name}
+                  <label className="reserveLabel reserveLabel--icon">
+                    <span className="reserveLabelText">
+                      <User size={16} strokeWidth={2} aria-hidden />
+                      {t.name}
+                    </span>
                     <input value={guestForm.customerName} onChange={(e) => setGuestForm((s) => ({ ...s, customerName: e.target.value }))} autoComplete="name" />
                   </label>
-                  <label className="reserveLabel">
-                    {t.phone}
-                    <input type="tel" value={guestForm.customerPhone} onChange={(e) => setGuestForm((s) => ({ ...s, customerPhone: e.target.value }))} autoComplete="tel" />
+                  <label className="reserveLabel reserveLabel--icon">
+                    <span className="reserveLabelText">
+                      <Phone size={16} strokeWidth={2} aria-hidden />
+                      {t.phone}
+                    </span>
+                    <input
+                      type="tel"
+                      inputMode="tel"
+                      value={guestForm.customerPhone}
+                      onChange={(e) => setGuestForm((s) => ({ ...s, customerPhone: e.target.value }))}
+                      autoComplete="tel"
+                    />
                   </label>
-                  <label className="reserveLabel reserveSpan2">
-                    {t.email}
+                  <label className="reserveLabel reserveLabel--icon reserveSpan2">
+                    <span className="reserveLabelText">
+                      <Mail size={16} strokeWidth={2} aria-hidden />
+                      {t.email}
+                    </span>
                     <input type="email" value={guestForm.customerEmail} onChange={(e) => setGuestForm((s) => ({ ...s, customerEmail: e.target.value }))} autoComplete="email" />
                   </label>
                 </div>
-                <div className="reserveNotifRow">
-                  <button
-                    type="button"
-                    className="ghostBtn"
-                    onClick={async () => {
-                      if (!selectedTenantId || (!guestForm.customerPhone && !guestForm.customerEmail)) return;
-                      const qs = new URLSearchParams();
-                      if (guestForm.customerPhone) qs.set('phone', guestForm.customerPhone);
-                      if (guestForm.customerEmail) qs.set('email', guestForm.customerEmail.trim().toLowerCase());
-                      try {
-                        const rows = await apiGetWithHeaders<NotificationRow[]>(
-                          `/guest/customer-notifications?${qs.toString()}`,
-                          { 'x-tenant-id': selectedTenantId },
-                        );
-                        setCustomerNotifs(rows);
-                      } catch {
-                        setCustomerNotifs([]);
-                      }
-                    }}
-                  >
-                    {t.loadMyNotifications}
-                  </button>
+
+                <button
+                  type="button"
+                  className="reserveSubmitBtn"
+                  disabled={
+                    reservationSubmitting ||
+                    !pendingSlot ||
+                    !guestForm.customerName.trim() ||
+                    !guestForm.customerPhone.trim()
+                  }
+                  onClick={() => void submitReservationRequest()}
+                >
+                  {reservationSubmitting ? <Loader2 size={20} className="reserveSpin" aria-hidden /> : <Send size={20} aria-hidden />}
+                  {reservationSubmitting ? t.reserveSending : t.reserveSubmit}
+                </button>
+                {!pendingSlot ? <p className="reserveSubmitHint muted">{t.reserveSelectSlotFirst}</p> : null}
+                </div>
+
+                <details className="reserveNotifyDetails">
+                  <summary>{t.reserveNotifyToggle}</summary>
+                  <div className="reserveNotifRow">
+                    <button
+                      type="button"
+                      className="ghostBtn"
+                      onClick={async () => {
+                        if (!selectedTenantId || (!guestForm.customerPhone && !guestForm.customerEmail)) return;
+                        const qs = new URLSearchParams();
+                        if (guestForm.customerPhone) qs.set('phone', guestForm.customerPhone);
+                        if (guestForm.customerEmail) qs.set('email', guestForm.customerEmail.trim().toLowerCase());
+                        try {
+                          const rows = await apiGetWithHeaders<NotificationRow[]>(
+                            `/guest/customer-notifications?${qs.toString()}`,
+                            { 'x-tenant-id': selectedTenantId },
+                          );
+                          setCustomerNotifs(rows);
+                        } catch {
+                          setCustomerNotifs([]);
+                        }
+                      }}
+                    >
+                      {t.loadMyNotifications}
+                    </button>
+                  </div>
+                  <div className="reserveNotifList">
+                    {customerNotifs.map((n) => (
+                      <div key={n.id} className="reserveNotifCard">
+                        <span className="reserveNotifDate">{new Date(n.createdAt).toLocaleString(lang === 'tr' ? 'tr-TR' : 'en-US')}</span>
+                        <span className="reserveNotifAction">{n.action}</span>
+                        <span className="reserveNotifMeta">
+                          {typeof n.metadata === 'object' && n.metadata && 'toStatus' in n.metadata
+                            ? String((n.metadata as { toStatus?: string }).toStatus ?? '')
+                            : '—'}
+                        </span>
+                      </div>
+                    ))}
+                    {customerNotifs.length === 0 ? <p className="muted">{t.noRecords}</p> : null}
+                  </div>
+                </details>
+              </div>
                 </div>
               </div>
-
-              <h4 className="reserveSubheading">{t.customerNotifications}</h4>
-              <div className="reserveNotifList">
-                {customerNotifs.map((n) => (
-                  <div key={n.id} className="reserveNotifCard">
-                    <span className="reserveNotifDate">{new Date(n.createdAt).toLocaleString(lang === 'tr' ? 'tr-TR' : 'en-US')}</span>
-                    <span className="reserveNotifAction">{n.action}</span>
-                    <span className="reserveNotifMeta">
-                      {typeof n.metadata === 'object' && n.metadata && 'toStatus' in n.metadata
-                        ? String((n.metadata as { toStatus?: string }).toStatus ?? '')
-                        : '—'}
-                    </span>
-                  </div>
-                ))}
-                {customerNotifs.length === 0 ? <p className="muted">{t.noRecords}</p> : null}
-              </div>
-            </section>
+            </div>
           </div>
         ) : null}
 
-        {location.pathname === '/apply' ? (
+        {isApplyWizardPath ? (
           <div className="publicContent publicPagePad publicApply">
             <section className="card applyFlow">
               <div className="applyHero">
+                {location.pathname === '/app/showcase' ? (
+                  <p className="applyShowcaseBadge">{t.subscribeShowcaseBadge}</p>
+                ) : null}
                 <h2 className="applyTitle">{t.applyWizardTitle}</h2>
                 <p className="muted applyLead">{t.applyWizardLead}</p>
               </div>
@@ -1627,6 +2587,7 @@ export function App() {
                   { n: 2, label: t.applyStep2Title },
                   { n: 3, label: t.applyStep3Title },
                   { n: 4, label: t.applyStep4Title },
+                  { n: 5, label: t.applyStep5Title },
                 ].map(({ n, label }) => (
                   <button
                     key={n}
@@ -1668,7 +2629,7 @@ export function App() {
                     </button>
                   </div>
                   <p className="applyFieldLabel">{t.verticalType}</p>
-                  <div className="applyVerticalGrid">
+                  <div className="applyVerticalGrid applyVerticalGrid--3">
                     <button
                       type="button"
                       className={`applyVerticalCard ${onboardForm.vertical === 'BEAUTY' ? 'isSelected' : ''}`}
@@ -1684,6 +2645,14 @@ export function App() {
                     >
                       <Shield size={22} aria-hidden />
                       {t.applyVerticalHealth}
+                    </button>
+                    <button
+                      type="button"
+                      className={`applyVerticalCard ${onboardForm.vertical === 'RESTAURANT' ? 'isSelected' : ''}`}
+                      onClick={() => setOnboardForm((s) => ({ ...s, vertical: 'RESTAURANT' }))}
+                    >
+                      <Utensils size={22} aria-hidden />
+                      {t.applyVerticalRestaurant}
                     </button>
                   </div>
                 </div>
@@ -1757,7 +2726,7 @@ export function App() {
                   </div>
                   <div className="applyRecommendBanner">
                     <strong>{t.applyRecommended}:</strong>{' '}
-                    {plans.find((p) => p.code === recommendedPlanCode)?.name ?? recommendedPlanCode}
+                    {visiblePlans.find((p) => p.code === recommendedPlanCode)?.name ?? recommendedPlanCode}
                     <span className="applyRecommendHint">{t.applyRecommendedHint}</span>
                   </div>
                 </div>
@@ -1768,7 +2737,7 @@ export function App() {
                   <h3 className="applyStepHeading">{t.applyStep3Title}</h3>
                   <p className="muted">{t.comparePlans}</p>
                   <div className="applyPlanGrid">
-                    {plans.map((plan, idx) => {
+                    {visiblePlans.map((plan, idx) => {
                       const featured = idx === applyFeaturedPlanIdx;
                       const selected = onboardForm.planCode === plan.code;
                       const recommended = plan.code === recommendedPlanCode;
@@ -1780,6 +2749,9 @@ export function App() {
                           {recommended ? <span className="applyPlanBadge">{t.applyRecommended}</span> : null}
                           {featured ? <span className="applyPlanBadge applyPlanBadgeAlt">{t.landingPlanPopular}</span> : null}
                           <h4 className="applyPlanName">{plan.name}</h4>
+                          <p className="applyPlanSku">
+                            <code>{plan.code}</code>
+                          </p>
                           {plan.description ? <p className="applyPlanDesc">{plan.description}</p> : null}
                           <p className="applyPlanPrice">
                             <span className="applyPlanCurrency">₺</span>
@@ -1855,6 +2827,36 @@ export function App() {
                       <input type="email" value={onboardForm.adminEmail} onChange={(e) => setOnboardForm((s) => ({ ...s, adminEmail: e.target.value }))} autoComplete="email" />
                     </label>
                     <label className="applyLabel">
+                      {t.applyCompanyPhone}
+                      <input
+                        type="tel"
+                        value={onboardForm.companyPhone}
+                        onChange={(e) => setOnboardForm((s) => ({ ...s, companyPhone: e.target.value }))}
+                        autoComplete="tel"
+                        placeholder="+90 …"
+                      />
+                    </label>
+                    <label className="applyLabel">
+                      {t.applyAdminPassword}
+                      <input
+                        type="password"
+                        value={onboardForm.adminPassword}
+                        onChange={(e) => setOnboardForm((s) => ({ ...s, adminPassword: e.target.value }))}
+                        autoComplete="new-password"
+                        minLength={8}
+                      />
+                    </label>
+                    <label className="applyLabel">
+                      {t.applyAdminPasswordConfirm}
+                      <input
+                        type="password"
+                        value={onboardForm.adminPasswordConfirm}
+                        onChange={(e) => setOnboardForm((s) => ({ ...s, adminPasswordConfirm: e.target.value }))}
+                        autoComplete="new-password"
+                        minLength={8}
+                      />
+                    </label>
+                    <label className="applyLabel">
                       {t.applyDefaultCurrency}
                       <select value={onboardForm.defaultCurrency} onChange={(e) => setOnboardForm((s) => ({ ...s, defaultCurrency: e.target.value }))}>
                         <option value="TRY">TRY</option>
@@ -1880,6 +2882,110 @@ export function App() {
                   <p className="muted applySummary">
                     {t.selectedPlan}: <strong>{selectedPlan?.name ?? '—'}</strong> ({selectedPlan?.code ?? '—'})
                   </p>
+                </div>
+              ) : null}
+
+              {applyStep === 5 ? (
+                <div className="applyStepBlock">
+                  <h3 className="applyStepHeading">{t.applyStep5Title}</h3>
+                  <p className="muted applyStepDesc">{t.applyPaymentLead}</p>
+                  {!purchaseContext ? (
+                    <p className="muted">{t.invalidForm}</p>
+                  ) : (
+                    <>
+                      <div className="applyPaymentSummary card" style={{ padding: '16px', marginBottom: 16 }}>
+                        <p>
+                          <strong>{purchaseContext.companyName}</strong> · <code>{purchaseContext.tenantSlug}</code>
+                        </p>
+                        <p className="muted">
+                          {t.adminEmail}: {purchaseContext.adminEmail}
+                        </p>
+                        <p>
+                          {t.selectedPlan}: <strong>{purchasePlan?.name ?? purchaseContext.planCode}</strong> — ₺
+                          {purchasePlan?.priceAmount ?? '—'}{' '}
+                          {purchasePlan?.interval === 'YEARLY' ? t.periodYearly : t.periodMonthly}
+                        </p>
+                      </div>
+                      <div className="landingPaymentPanel" style={{ marginTop: 12 }}>
+                        <h4 className="landingH3">{t.landingPaymentBank}</h4>
+                        <p className="muted">{t.landingBankHint}</p>
+                        {platformBanks.length === 0 ? (
+                          <p className="muted">{t.landingBankEmpty}</p>
+                        ) : (
+                          <ul className="landingBankList">
+                            {platformBanks.map((b) => (
+                              <li key={b.id} className="landingBankItem">
+                                <strong>{b.label}</strong>
+                                <span>{b.bankName}</span>
+                                <code className="landingIban">{b.iban}</code>
+                                <span className="muted">{b.accountHolder}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                      <div className="applyPaymentActions" style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 20 }}>
+                        <button
+                          type="button"
+                          className="primaryBtn"
+                          disabled={paymentSubmitting || stripeSubmitting}
+                          onClick={async () => {
+                            if (!purchaseContext) return;
+                            setPaymentSubmitting(true);
+                            try {
+                              await apiPost('/saas/payments/mock-pay', { subscriptionId: purchaseContext.subscriptionId });
+                              sessionStorage.removeItem(APPLY_PURCHASE_STORAGE_KEY);
+                              setPurchaseContext(null);
+                              setApplyStep(1);
+                              setActionMessage(t.paymentCompleteSuccess);
+                            } catch {
+                              setActionMessage(t.paymentFailed);
+                            } finally {
+                              setPaymentSubmitting(false);
+                            }
+                          }}
+                        >
+                          {paymentSubmitting ? t.loading : t.payMockDemo}
+                        </button>
+                        <button
+                          type="button"
+                          className="landingBtn landingBtnOutline"
+                          disabled={paymentSubmitting || stripeSubmitting}
+                          onClick={async () => {
+                            if (!purchaseContext) return;
+                            setStripeSubmitting(true);
+                            try {
+                              sessionStorage.setItem(APPLY_PURCHASE_STORAGE_KEY, JSON.stringify(purchaseContext));
+                              const origin = window.location.origin;
+                              const res = await apiPost<{
+                                ok: boolean;
+                                configured?: boolean;
+                                url?: string | null;
+                                message?: string;
+                              }>('/saas/stripe/checkout-session', {
+                                planCode: purchaseContext.planCode,
+                                subscriptionId: purchaseContext.subscriptionId,
+                                successUrl: `${origin}${applyReturnPath}?stripe=1&session_id={CHECKOUT_SESSION_ID}`,
+                                cancelUrl: `${origin}${applyReturnPath}?stripe_cancel=1`,
+                                customerEmail: purchaseContext.adminEmail,
+                              });
+                              if (res.ok && res.url) {
+                                window.location.assign(res.url);
+                              } else {
+                                setActionMessage(res.message ?? t.stripeNotConfigured);
+                              }
+                            } catch {
+                              setActionMessage(t.paymentFailed);
+                            } finally {
+                              setStripeSubmitting(false);
+                            }
+                          }}
+                        >
+                          {stripeSubmitting ? t.loading : t.payWithCard}
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               ) : null}
 
@@ -1914,14 +3020,26 @@ export function App() {
                     >
                       {t.applyNext}
                     </button>
-                  ) : (
+                  ) : applyStep === 4 ? (
                     <button
                       type="button"
                       className="primaryBtn"
                       disabled={applySubmitting}
                       onClick={async () => {
+                        if (purchaseContext) {
+                          setApplyStep(5);
+                          return;
+                        }
                         if (!onboardForm.companyName || !onboardForm.slug || !onboardForm.adminEmail || !onboardForm.adminFullName || !onboardForm.planCode) {
                           setActionMessage(t.invalidForm);
+                          return;
+                        }
+                        if (onboardForm.adminPassword.length < 8) {
+                          setActionMessage(t.applyPasswordTooShort);
+                          return;
+                        }
+                        if (onboardForm.adminPassword !== onboardForm.adminPasswordConfirm) {
+                          setActionMessage(t.applyPasswordMismatch);
                           return;
                         }
                         if (!termsAccepted) {
@@ -1930,16 +3048,41 @@ export function App() {
                         }
                         setApplySubmitting(true);
                         try {
-                          await apiPost('/saas/onboard', {
-                            ...onboardForm,
+                          const res = await apiPost<{
+                            tenant: { slug: string; name: string };
+                            subscription: { id: string };
+                          }>('/saas/onboard', {
                             companyName: applicationType === 'franchise' ? `${onboardForm.companyName} Franchise` : onboardForm.companyName,
+                            slug: onboardForm.slug,
+                            vertical: onboardForm.vertical,
+                            defaultCurrency: onboardForm.defaultCurrency,
+                            companyPhone: onboardForm.companyPhone.trim() || undefined,
+                            adminFullName: onboardForm.adminFullName,
+                            adminEmail: onboardForm.adminEmail,
+                            adminPassword: onboardForm.adminPassword,
+                            planCode: onboardForm.planCode,
                             notes: applyNotes.trim() || undefined,
                             applicationKind: applicationType,
                           });
+                          const ctx: PurchaseContext = {
+                            subscriptionId: res.subscription.id,
+                            tenantSlug: res.tenant.slug,
+                            planCode: onboardForm.planCode,
+                            companyName:
+                              applicationType === 'franchise' ? `${onboardForm.companyName} Franchise` : onboardForm.companyName,
+                            adminEmail: onboardForm.adminEmail,
+                          };
+                          setPurchaseContext(ctx);
+                          sessionStorage.setItem(APPLY_PURCHASE_STORAGE_KEY, JSON.stringify(ctx));
                           setActionMessage(t.onboardSuccess);
-                          setApplyStep(1);
+                          setApplyStep(5);
                           setApplyNotes('');
                           setTermsAccepted(false);
+                          setOnboardForm((s) => ({
+                            ...s,
+                            adminPassword: '',
+                            adminPasswordConfirm: '',
+                          }));
                         } catch {
                           setActionMessage(t.onboardFailed);
                         } finally {
@@ -1949,34 +3092,56 @@ export function App() {
                     >
                       {applySubmitting ? t.loading : t.applySubmit}
                     </button>
-                  )}
+                  ) : applyStep === 5 ? (
+                    <button type="button" className="ghostBtn" onClick={() => goPublic('/')}>
+                      {t.backToSite}
+                    </button>
+                  ) : null}
                 </div>
               </div>
             </section>
           </div>
         ) : null}
-        {actionMessage ? <div className="publicContent publicToast"><p className="muted">{actionMessage}</p></div> : null}
+        {actionMessage ? (
+          <div className="publicContent publicToast">
+            <div className="appToast appToast--public" role="status" aria-live="polite" aria-label={t.appToastAria}>
+              {actionMessage}
+            </div>
+          </div>
+        ) : null}
       </main>
     );
   }
 
   return (
-    <main className="layout">
-      <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
+    <main className={`layout ${!isLoggedIn ? 'layout--gate' : ''}`}>
+      <aside className={`sidebar ${sidebarOpen ? 'open' : ''} ${!isLoggedIn ? 'sidebar--gateHidden' : ''}`}>
         <div className="brand">AppointmentOS</div>
         <div className="langSwitch">
           <button className={lang === 'tr' ? 'active' : ''} onClick={() => setLang('tr')}>TR</button>
           <button className={lang === 'en' ? 'active' : ''} onClick={() => setLang('en')}>EN</button>
         </div>
         <nav className="menu">
+          {visibleTabs.includes('guests') ? (
+            <>
+              <p className="menuSection menuSection--reservation">{t.menuSectionReservation}</p>
+              <button
+                type="button"
+                className={`menuPrimaryItem ${tab === 'guests' ? 'active' : ''}`}
+                onClick={() => onTabChange('guests')}
+              >
+                <span className="menuIcon">{iconByTab.guests}</span>
+                <span className="menuPrimaryItemLabel">{t.guests}</span>
+              </button>
+            </>
+          ) : null}
+
           <p className="menuSection">{t.coreSection}</p>
-          {visibleTabs.includes('showcase') ? <button className={tab === 'showcase' ? 'active' : ''} onClick={() => onTabChange('showcase')}><span className="menuIcon">{iconByTab.showcase}</span>{t.showcase}</button> : null}
           {visibleTabs.includes('overview') ? <button className={tab === 'overview' ? 'active' : ''} onClick={() => onTabChange('overview')}><span className="menuIcon">{iconByTab.overview}</span>{t.overview}</button> : null}
           {visibleTabs.includes('billing') ? <button className={tab === 'billing' ? 'active' : ''} onClick={() => onTabChange('billing')}><span className="menuIcon">{iconByTab.billing}</span>{t.billing}</button> : null}
           {visibleTabs.includes('operations') ? <button className={tab === 'operations' ? 'active' : ''} onClick={() => onTabChange('operations')}><span className="menuIcon">{iconByTab.operations}</span>{t.operations}</button> : null}
 
           <p className="menuSection">{t.peopleSection}</p>
-          {visibleTabs.includes('guests') ? <button className={tab === 'guests' ? 'active' : ''} onClick={() => onTabChange('guests')}><span className="menuIcon">{iconByTab.guests}</span>{t.guests}</button> : null}
           {visibleTabs.includes('employees') ? <button className={tab === 'employees' ? 'active' : ''} onClick={() => onTabChange('employees')}><span className="menuIcon">{iconByTab.employees}</span>{t.employees}</button> : null}
           {visibleTabs.includes('managers') ? <button className={tab === 'managers' ? 'active' : ''} onClick={() => onTabChange('managers')}><span className="menuIcon">{iconByTab.managers}</span>{t.managers}</button> : null}
 
@@ -2001,7 +3166,7 @@ export function App() {
         </nav>
       </aside>
 
-      <section className="content">
+      <section className={`content ${!isLoggedIn ? 'content--fullWhenGate' : ''}`}>
         <header className="topbar">
           <button type="button" className="menuToggle" onClick={() => setSidebarOpen((v) => !v)} aria-label={t.menu}>
             {t.menu}
@@ -2010,19 +3175,26 @@ export function App() {
             <h1>{t.appTitle}</h1>
             <p>{t.appSubtitle}</p>
           </div>
+          {isLoggedIn ? (
+            <div className="topbarCrumb muted" title={adminTabDocumentTitle[tab] ?? tab}>
+              {adminTabDocumentTitle[tab] ?? tab}
+            </div>
+          ) : null}
           <div className="topbarActions">
-            <select
-              className="tenantSelect"
-              value={selectedTenantId}
-              onChange={(e) => setSelectedTenantId(e.target.value)}
-              aria-label={t.tenant}
-            >
-              {tenants.map((tenant) => (
-                <option key={tenant.id} value={tenant.id}>
-                  {tenant.name}
-                </option>
-              ))}
-            </select>
+            {isLoggedIn ? (
+              <select
+                className="tenantSelect"
+                value={selectedTenantId}
+                onChange={(e) => setSelectedTenantId(e.target.value)}
+                aria-label={t.tenant}
+              >
+                {tenants.map((tenant) => (
+                  <option key={tenant.id} value={tenant.id}>
+                    {tenant.name}
+                  </option>
+                ))}
+              </select>
+            ) : null}
             <button type="button" className="ghostBtn topbarThemeBtn" onClick={() => setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))} aria-label={theme === 'dark' ? 'Light theme' : 'Dark theme'}>
               {theme === 'dark' ? <SunMedium size={18} /> : <MoonStar size={18} />}
             </button>
@@ -2031,17 +3203,56 @@ export function App() {
 
         {!isLoggedIn ? (
           <section className="card loginCard">
-            <h3>{t.loginQuick}</h3>
+            <h3>{t.loginRequiredTitle}</h3>
             <p className="muted">{t.loginQuickDesc}</p>
             <div className="profileSwitch">
-              <button className={devProfile === 'superAdmin' ? 'active' : ''} onClick={() => setDevProfile('superAdmin')}>{t.superAdminProfile}</button>
-              <button className={devProfile === 'companyManager' ? 'active' : ''} onClick={() => setDevProfile('companyManager')}>{t.companyManagerProfile}</button>
-              <button className={devProfile === 'franchiseManager' ? 'active' : ''} onClick={() => setDevProfile('franchiseManager')}>{t.franchiseManagerProfile}</button>
-              <button className={devProfile === 'employee' ? 'active' : ''} onClick={() => setDevProfile('employee')}>{t.employeeProfile}</button>
-              <button className={devProfile === 'guest' ? 'active' : ''} onClick={() => setDevProfile('guest')}>{t.guestProfile}</button>
+              <button type="button" className={devProfile === 'superAdmin' ? 'active' : ''} onClick={() => setDevProfile('superAdmin')}>{t.superAdminProfile}</button>
+              <button type="button" className={devProfile === 'companyManager' ? 'active' : ''} onClick={() => setDevProfile('companyManager')}>{t.companyManagerProfile}</button>
+              <button type="button" className={devProfile === 'franchiseManager' ? 'active' : ''} onClick={() => setDevProfile('franchiseManager')}>{t.franchiseManagerProfile}</button>
+              <button type="button" className={devProfile === 'employee' ? 'active' : ''} onClick={() => setDevProfile('employee')}>{t.employeeProfile}</button>
+              <button type="button" className={devProfile === 'guest' ? 'active' : ''} onClick={() => setDevProfile('guest')}>{t.guestProfile}</button>
             </div>
+            <div className="modalActions loginGateActions">
+              <button
+                type="button"
+                className="primaryBtn"
+                onClick={() => {
+                  setIsLoggedIn(true);
+                  if (isDev) {
+                    try {
+                      window.localStorage.setItem(DEV_ADMIN_LOGIN_KEY, '1');
+                    } catch {
+                      /* ignore */
+                    }
+                  }
+                }}
+              >
+                {t.loginAs} {profileLabel[devProfile]}
+              </button>
+              {isDev ? (
+                <button
+                  type="button"
+                  className="ghostBtn loginDevQuickBtn"
+                  onClick={() => {
+                    setDevProfile('companyManager');
+                    setIsLoggedIn(true);
+                    try {
+                      window.localStorage.setItem(DEV_ADMIN_LOGIN_KEY, '1');
+                    } catch {
+                      /* ignore */
+                    }
+                    navigate('/app/overview');
+                  }}
+                >
+                  {t.devQuickEnter}
+                </button>
+              ) : null}
+            </div>
+            {isDev ? <p className="muted loginDevHint">{t.devQuickLoginHint}</p> : null}
             <div className="modalActions">
-              <button className="primaryBtn" onClick={() => setIsLoggedIn(true)}>{t.loginAs} {profileLabel[devProfile]}</button>
+              <button type="button" className="ghostBtn" onClick={() => navigate('/')}>
+                {t.backToSite}
+              </button>
             </div>
           </section>
         ) : (
@@ -2051,177 +3262,507 @@ export function App() {
               <p className="sessionRoleHint">{roleHint}</p>
             </div>
             <div className="modalActions">
-              <button className="ghostBtn" onClick={() => setIsLoggedIn(false)}>{t.logout}</button>
-              <button className="primaryBtn" onClick={() => onTabChange('overview')}>{t.goOverview}</button>
+              <button
+                type="button"
+                className="ghostBtn"
+                onClick={() => {
+                  setIsLoggedIn(false);
+                  if (isDev) {
+                    try {
+                      window.localStorage.removeItem(DEV_ADMIN_LOGIN_KEY);
+                    } catch {
+                      /* ignore */
+                    }
+                  }
+                }}
+              >
+                {t.logout}
+              </button>
+              <button type="button" className="primaryBtn" onClick={() => onTabChange('overview')}>{t.goOverview}</button>
             </div>
           </section>
         )}
 
-        {actionMessage ? <p className="muted">{actionMessage}</p> : null}
-
-        {tab === 'showcase' ? (
-          <section className="contentGrid single">
-            <article className="card wide">
-              <h3>{t.showcase}</h3>
-              <p className="muted">AppointmentOS; çok şubeli işletmeler için rezervasyon, ekip takibi, ödeme ve muhasebe süreçlerini tek panelde birleştiren kurumsal SaaS platformudur.</p>
-              <h4>{t.onboardTitle}</h4>
-              <div className="formGrid">
-                <label>{t.companyName}<input value={onboardForm.companyName} onChange={(e) => setOnboardForm((s) => ({ ...s, companyName: e.target.value }))} /></label>
-                <label>{t.slug}<input value={onboardForm.slug} onChange={(e) => setOnboardForm((s) => ({ ...s, slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-') }))} /></label>
-                <label>{t.verticalType}<select value={onboardForm.vertical} onChange={(e) => setOnboardForm((s) => ({ ...s, vertical: e.target.value as Vertical }))}><option value="BEAUTY">BEAUTY</option><option value="HEALTH">HEALTH</option></select></label>
-                <label>{t.adminName}<input value={onboardForm.adminFullName} onChange={(e) => setOnboardForm((s) => ({ ...s, adminFullName: e.target.value }))} /></label>
-                <label>{t.adminEmail}<input value={onboardForm.adminEmail} onChange={(e) => setOnboardForm((s) => ({ ...s, adminEmail: e.target.value }))} /></label>
-                <label>{t.plan}<select value={onboardForm.planCode} onChange={(e) => setOnboardForm((s) => ({ ...s, planCode: e.target.value }))}><option value="">{t.plan}</option>{plans.map((plan) => <option key={plan.id} value={plan.code}>{plan.name}</option>)}</select></label>
-              </div>
-              <div className="modalActions">
-                <button className="primaryBtn" onClick={async () => {
-                  if (!onboardForm.companyName || !onboardForm.slug || !onboardForm.adminEmail || !onboardForm.adminFullName || !onboardForm.planCode) {
-                    setActionMessage(t.invalidForm);
-                    return;
-                  }
-                  try {
-                    await apiPost('/saas/onboard', onboardForm);
-                    setActionMessage(t.onboardSuccess);
-                    const tenantRows = await apiGet<TenantSummary[]>('/platform/tenants-summary');
-                    setTenants(tenantRows);
-                  } catch {
-                    setActionMessage(t.onboardFailed);
-                  }
-                }}>{t.startTrial}</button>
-              </div>
-              <div className="plansGrid">
-                {plans.map((plan) => (
-                  <div key={plan.id} className="planCard">
-                    <h4>{plan.name}</h4>
-                    <p className="price">₺{plan.priceAmount}</p>
-                    <p className="muted">{plan.interval}</p>
-                  </div>
-                ))}
-              </div>
-            </article>
-          </section>
+        {actionMessage ? (
+          <div className="appToast" role="status" aria-live="polite" aria-label={t.appToastAria}>
+            {actionMessage}
+          </div>
         ) : null}
 
+        {isLoggedIn ? (
+          <>
         {tab === 'overview' ? (
           <>
-            <section className="kpiGrid">
-              {kpis.map((kpi) => (
-                <article className="card" key={kpi.label}>
-                  <p className="muted">{kpi.label}</p>
-                  <h2>{kpi.value}</h2>
-                  <span className="delta">{kpi.delta}</span>
-                </article>
-              ))}
-            </section>
-            <section className="contentGrid">
-              <article className="card wide">
-                <h3>{t.tenantPortfolio}</h3>
-                <div className="tableWrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>{t.tenant}</th>
-                        <th>{t.vertical}</th>
-                        <th>{t.branches}</th>
-                        <th>{t.plan}</th>
-                        <th>{t.status}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {tenants.map((tenant) => (
-                        <tr key={tenant.id}>
-                          <td>{tenant.name}</td>
-                          <td>{tenant.vertical}</td>
-                          <td>{tenant.branches}</td>
-                          <td>{tenant.planName}</td>
-                          <td><span className="badge">{tenant.subscriptionStatus}</span></td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </article>
-              <article className="card">
-                <h3>{t.fastChecks}</h3>
-                <div className="staffRow"><span>{t.apiHealth}</span><strong>{t.healthy}</strong></div>
-                <div className="staffRow"><span>{t.dbMigrations}</span><strong>{t.upToDate}</strong></div>
-                <div className="staffRow"><span>{t.seedData}</span><strong>{t.loaded}</strong></div>
-                <div className="staffRow"><span>{t.tenantIsolation}</span><strong>{t.active}</strong></div>
-              </article>
-            </section>
+            {devProfile === 'superAdmin' ? (
+              <>
+                <p className="muted overviewPageLead">{t.overviewPlatformLead}</p>
+                <section className="kpiGrid">
+                  {kpis.map((kpi) => (
+                    <article className="card" key={kpi.label}>
+                      <p className="muted">{kpi.label}</p>
+                      <h2>{kpi.value}</h2>
+                      <span className="delta">{kpi.delta}</span>
+                    </article>
+                  ))}
+                </section>
+                <section className="contentGrid">
+                  <article className="card wide">
+                    <h3>{t.tenantPortfolio}</h3>
+                    <div className="tableWrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>{t.tenant}</th>
+                            <th>{t.vertical}</th>
+                            <th>{t.branches}</th>
+                            <th>{t.plan}</th>
+                            <th>{t.status}</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {tenants.map((tenant) => (
+                            <tr key={tenant.id}>
+                              <td>{tenant.name}</td>
+                              <td>{tenant.vertical}</td>
+                              <td>{tenant.branches}</td>
+                              <td>{tenant.planName}</td>
+                              <td>
+                                <span className="badge">{tenant.subscriptionStatus}</span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </article>
+                  <article className="card">
+                    <h3>{t.fastChecks}</h3>
+                    <div className="staffRow">
+                      <span>{t.apiHealth}</span>
+                      <strong>{t.healthy}</strong>
+                    </div>
+                    <div className="staffRow">
+                      <span>{t.dbMigrations}</span>
+                      <strong>{t.upToDate}</strong>
+                    </div>
+                    <div className="staffRow">
+                      <span>{t.seedData}</span>
+                      <strong>{t.loaded}</strong>
+                    </div>
+                    <div className="staffRow">
+                      <span>{t.tenantIsolation}</span>
+                      <strong>{t.active}</strong>
+                    </div>
+                  </article>
+                </section>
+              </>
+            ) : (
+              <>
+                <p className="muted overviewPageLead">{t.overviewTenantLead}</p>
+                {useRestaurantAreas ? (
+                  <div className="overviewVerticalBanner overviewVerticalBanner--restaurant">
+                    <Utensils size={22} strokeWidth={1.75} aria-hidden className="overviewVerticalBannerIcon" />
+                    <div>
+                      <strong className="overviewVerticalBannerTitle">{t.overviewVerticalRestaurant}</strong>
+                      <p className="muted overviewVerticalBannerDesc">{t.overviewRestaurantHint}</p>
+                    </div>
+                  </div>
+                ) : null}
+                {overviewTenantLoading ? <p className="muted">{t.loading}</p> : null}
+                {tenantOverview ? (
+                  <>
+                    <section className="kpiGrid">
+                      <article className="card">
+                        <p className="muted">{t.tenantMetricsBranches}</p>
+                        <h2>{tenantOverview.metrics.branches}</h2>
+                      </article>
+                      <article className="card">
+                        <p className="muted">{t.tenantMetricsStaff}</p>
+                        <h2>{tenantOverview.metrics.staff}</h2>
+                      </article>
+                      <article className="card">
+                        <p className="muted">{t.tenantMetricsAppts7d}</p>
+                        <h2>{tenantOverview.metrics.appointmentsLast7Days}</h2>
+                      </article>
+                      <article className="card">
+                        <p className="muted">{t.tenantMetricsServiceIncome}</p>
+                        <h2>
+                          ₺
+                          {Number(tenantOverview.metrics.serviceIncomeTotal).toLocaleString(lang === 'tr' ? 'tr-TR' : 'en-US', {
+                            minimumFractionDigits: 2,
+                          })}
+                        </h2>
+                      </article>
+                    </section>
+                    <section className="contentGrid">
+                      <article className="card wide">
+                        <h3>{t.subscriptionDetail}</h3>
+                        {tenantOverview.subscription ? (
+                          <div className="billingSubSummary">
+                            <p>
+                              <strong>{tenantOverview.subscription.planName}</strong>{' '}
+                              <code>{tenantOverview.subscription.planCode}</code>
+                            </p>
+                            <p className="muted">
+                              {t.status}: <span className="badge">{tenantOverview.subscription.status}</span>
+                            </p>
+                            {tenantOverview.subscription.trialEndsAt ? (
+                              <p className="muted">
+                                {t.trialUntil}:{' '}
+                                {new Date(tenantOverview.subscription.trialEndsAt).toLocaleString(lang === 'tr' ? 'tr-TR' : 'en-US')}
+                              </p>
+                            ) : null}
+                            {tenantOverview.subscription.nextBillingAt ? (
+                              <p className="muted">
+                                {t.nextBilling}:{' '}
+                                {new Date(tenantOverview.subscription.nextBillingAt).toLocaleString(lang === 'tr' ? 'tr-TR' : 'en-US')}
+                              </p>
+                            ) : null}
+                            <p className="muted">
+                              {t.tenant}: {tenantOverview.tenant.name} · {tenantOverview.tenant.slug}
+                            </p>
+                          </div>
+                        ) : (
+                          <p className="muted">{t.noSubscriptionForTenant}</p>
+                        )}
+                      </article>
+                      <article className="card">
+                        <h3>{t.liveOps}</h3>
+                        <p className="muted">{t.tenantMetricsApptsTotal}</p>
+                        <h2>{tenantOverview.metrics.appointmentsTotal}</h2>
+                        <p className="muted billingHint">{t.billingShortcutHint}</p>
+                        <button type="button" className="primaryBtn" onClick={() => onTabChange('billing')}>
+                          {t.billing}
+                        </button>
+                      </article>
+                    </section>
+                  </>
+                ) : !overviewTenantLoading ? (
+                  <p className="muted">{t.noRecords}</p>
+                ) : null}
+                {devProfile === 'guest' ? (
+                  <section className="card wide overviewGuestCta">
+                    <h3>{t.overviewGuestTitle}</h3>
+                    <p className="muted">{t.overviewGuestHint}</p>
+                    <button type="button" className="landingBtn landingBtnPrimary" onClick={() => navigate('/reserve')}>
+                      {t.navReserve}
+                    </button>
+                  </section>
+                ) : null}
+              </>
+            )}
           </>
         ) : null}
 
         {tab === 'billing' ? (
-          <section className="contentGrid single">
-            <article className="card wide">
-              <h3>{t.pricingPlans}</h3>
-              <div className="plansGrid">
-                {plans.map((plan) => (
-                  <div key={plan.id} className="planCard">
-                    <h4>{plan.name}</h4>
-                    <p className="price">₺{plan.priceAmount} / {plan.interval === 'MONTHLY' ? (lang === 'tr' ? 'ay' : 'month') : (lang === 'tr' ? 'yil' : 'year')}</p>
-                    <p className="muted">{plan.code}</p>
-                    <p className="muted">{t.branches}: {plan.maxBranches}</p>
-                    <p className="muted">{t.staff}: {plan.maxStaff}</p>
-                  </div>
-                ))}
-              </div>
-            </article>
-            <article className="card">
-              <h3>{t.recentPayments}</h3>
-              <div className="modalActions">
-                <select value={selectedSubscriptionId} onChange={(e) => setSelectedSubscriptionId(e.target.value)}>
-                  <option value="">{t.subscription}</option>
-                  {payments.map((p) => <option key={p.id} value={p.id}>{p.subscription.tenant.name}</option>)}
-                </select>
-                <button
-                  className="primaryBtn"
-                  onClick={async () => {
-                    if (!selectedTenant || plans.length === 0) return;
-                    try {
-                      const context = await apiGet<{ plans: Plan[] }>(`/saas/checkout-context?tenantSlug=${selectedTenant.slug}`);
-                      const firstPlan = context.plans[0] ?? plans[0];
-                      const sub = await apiPost<{ id: string }>('/saas/subscribe', { tenantSlug: selectedTenant.slug, planCode: firstPlan.code });
-                      await apiPost('/saas/payments/mock-pay', { subscriptionId: sub.id });
-                      setActionMessage(t.purchaseSuccess);
-                    } catch {
-                      setActionMessage(t.purchaseFailed);
-                    }
-                  }}
-                >
-                  {t.checkout}
-                </button>
-              </div>
-              <div className="tableWrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>{t.tenant}</th>
-                      <th>{t.plan}</th>
-                      <th>{t.amount}</th>
-                      <th>{t.status}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {payments.slice(0, 8).map((payment) => (
-                      <tr key={payment.id}>
-                        <td>{payment.subscription.tenant.name}</td>
-                        <td>{payment.subscription.plan.name}</td>
-                        <td>₺{payment.amount}</td>
-                        <td><span className="badge">{payment.status}</span></td>
-                      </tr>
+          <>
+            {devProfile === 'superAdmin' ? (
+              <section className="contentGrid single">
+                <p className="muted overviewPageLead">{t.billingPlatformLead}</p>
+                <article className="card wide">
+                  <h3>{t.pricingPlans}</h3>
+                  <p className="muted">{t.billingCatalogHint}</p>
+                  <div className="plansGrid">
+                    {plans.map((plan) => (
+                      <div key={plan.id} className="planCard">
+                        <h4>{plan.name}</h4>
+                        <p className="price">
+                          ₺{plan.priceAmount} / {plan.interval === 'MONTHLY' ? t.periodMonthly : t.periodYearly}
+                        </p>
+                        <p className="muted">
+                          <code>{plan.code}</code>
+                        </p>
+                        <p className="muted">
+                          {t.branches}: {plan.maxBranches} · {t.staff}: {plan.maxStaff}
+                        </p>
+                        {plan.badgeLabel ? <span className="landingPriceBadge">{plan.badgeLabel}</span> : null}
+                      </div>
                     ))}
-                  </tbody>
-                </table>
-              </div>
-            </article>
-          </section>
+                  </div>
+                </article>
+                <article className="card wide">
+                  <h3>{t.recentPayments}</h3>
+                  <p className="muted">{t.billingPlatformOpsHint}</p>
+                  <div className="modalActions billingPlatformActions">
+                    <label className="billingSelectLabel">
+                      {t.subscription}
+                      <select value={selectedSubscriptionId} onChange={(e) => setSelectedSubscriptionId(e.target.value)}>
+                        <option value="">{t.subscription}</option>
+                        {platformSubscriptionOptions.map((opt) => (
+                          <option key={opt.id} value={opt.id}>
+                            {opt.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <button
+                      type="button"
+                      className="primaryBtn"
+                      disabled={!selectedSubscriptionId}
+                      onClick={async () => {
+                        if (!selectedSubscriptionId) return;
+                        try {
+                          await apiPost('/saas/payments/mock-pay', { subscriptionId: selectedSubscriptionId });
+                          const rp = await apiGet<RecentPayment[]>('/platform/recent-payments');
+                          setPayments(rp);
+                          const ov = await apiGet<Overview>('/platform/overview');
+                          setOverview(ov);
+                          setActionMessage(t.purchaseSuccess);
+                        } catch {
+                          setActionMessage(t.purchaseFailed);
+                        }
+                      }}
+                    >
+                      {t.payDemoForSubscription}
+                    </button>
+                    <button
+                      type="button"
+                      className="ghostBtn"
+                      onClick={async () => {
+                        try {
+                          const rp = await apiGet<RecentPayment[]>('/platform/recent-payments');
+                          setPayments(rp);
+                          const ts = await apiGet<TenantSummary[]>('/platform/tenants-summary');
+                          setTenants(ts);
+                          setActionMessage(t.billingListRefreshed);
+                        } catch {
+                          setActionMessage(t.purchaseFailed);
+                        }
+                      }}
+                    >
+                      {t.billingRefreshButton}
+                    </button>
+                  </div>
+                  <div className="tableWrap">
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>{t.invoiceRef}</th>
+                          <th>{t.tenant}</th>
+                          <th>{t.plan}</th>
+                          <th>{t.amount}</th>
+                          <th>{t.status}</th>
+                          <th>{t.paymentDate}</th>
+                          <th>{t.provider}</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {payments.map((payment) => (
+                          <tr key={payment.id}>
+                            <td>
+                              <code>{paymentInvoiceLabel(payment.id)}</code>
+                            </td>
+                            <td>{payment.subscription.tenant.name}</td>
+                            <td>{payment.subscription.plan.name}</td>
+                            <td>₺{payment.amount}</td>
+                            <td>
+                              <span className="badge">{payment.status}</span>
+                            </td>
+                            <td>
+                              {payment.paidAt
+                                ? new Date(payment.paidAt).toLocaleString(lang === 'tr' ? 'tr-TR' : 'en-US')
+                                : payment.createdAt
+                                  ? new Date(payment.createdAt).toLocaleString(lang === 'tr' ? 'tr-TR' : 'en-US')
+                                  : '—'}
+                            </td>
+                            <td>
+                              <span className="muted">{payment.provider ?? '—'}</span>
+                              {payment.providerRef ? (
+                                <div>
+                                  <code className="billingProviderRef">{payment.providerRef}</code>
+                                </div>
+                              ) : null}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </article>
+              </section>
+            ) : (
+              <section className="contentGrid single billingTenantLayout">
+                <p className="muted overviewPageLead">{t.billingTenantLead}</p>
+                {billingTabLoading ? <p className="muted">{t.loading}</p> : null}
+                {tenantBilling ? (
+                  <>
+                    <article className="card wide">
+                      <h3>{t.billingTenantTitle}</h3>
+                      <p className="muted">
+                        {tenantBilling.tenant.name} · <code>{tenantBilling.tenant.slug}</code> · {tenantBilling.tenant.vertical}
+                      </p>
+                      {tenantBilling.subscription ? (
+                        <>
+                          <div className="billingSubSummary">
+                            <h4>{t.subscriptionDetail}</h4>
+                            <p>
+                              <strong>{tenantBilling.subscription.plan.name}</strong>{' '}
+                              <code>{tenantBilling.subscription.plan.code}</code>
+                            </p>
+                            <p className="muted">
+                              {t.status}: <span className="badge">{tenantBilling.subscription.status}</span>
+                            </p>
+                            <p className="muted">
+                              ₺{tenantBilling.subscription.plan.priceAmount} {tenantBilling.subscription.plan.currency} /{' '}
+                              {tenantBilling.subscription.plan.interval === 'YEARLY' ? t.periodYearly : t.periodMonthly}
+                            </p>
+                            {tenantBilling.subscription.trialEndsAt ? (
+                              <p className="muted">
+                                {t.trialUntil}:{' '}
+                                {new Date(tenantBilling.subscription.trialEndsAt).toLocaleString(lang === 'tr' ? 'tr-TR' : 'en-US')}
+                              </p>
+                            ) : null}
+                            <div className="billingRenewalCard">
+                              <h4 className="billingRenewalTitle">{t.billingRenewalTitle}</h4>
+                              <p className="muted billingRenewalLead">{t.billingRenewalLead}</p>
+                              <div className="billingRenewalGrid">
+                                <span className="billingRenewalItem">
+                                  <span className="muted">{t.billingPlanInterval}</span>
+                                  <strong>
+                                    {tenantBilling.subscription.plan.interval === 'YEARLY' ? t.periodYearly : t.periodMonthly}
+                                  </strong>
+                                </span>
+                                {tenantBilling.subscription.nextBillingAt ? (
+                                  <span className="billingRenewalItem">
+                                    <span className="muted">{t.nextBilling}</span>
+                                    <strong>
+                                      {new Date(tenantBilling.subscription.nextBillingAt).toLocaleDateString(
+                                        lang === 'tr' ? 'tr-TR' : 'en-US',
+                                        { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' },
+                                      )}
+                                    </strong>
+                                  </span>
+                                ) : (
+                                  <span className="billingRenewalItem">
+                                    <span className="muted">{t.status}</span>
+                                    <strong>{tenantBilling.subscription.status}</strong>
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="planLimitsGrid">
+                              <span>
+                                {t.branches}: <strong>{tenantBilling.subscription.plan.maxBranches}</strong>
+                              </span>
+                              <span>
+                                {t.staff}: <strong>{tenantBilling.subscription.plan.maxStaff}</strong>
+                              </span>
+                              <span>
+                                {t.applyMaxAppt}: <strong>{tenantBilling.subscription.plan.maxAppointmentsMo}</strong>
+                              </span>
+                            </div>
+                          </div>
+                          <div className="modalActions billingTenantPayRow">
+                            <button
+                              type="button"
+                              className="primaryBtn"
+                              onClick={async () => {
+                                if (!tenantBilling.subscription) return;
+                                try {
+                                  await apiPost('/saas/payments/mock-pay', { subscriptionId: tenantBilling.subscription.id });
+                                  if (!selectedTenant?.slug) return;
+                                  const data = await apiGet<TenantBillingPayload>(
+                                    `/saas/tenant-billing?tenantSlug=${encodeURIComponent(selectedTenant.slug)}`,
+                                  );
+                                  setTenantBilling(data);
+                                  setActionMessage(t.paymentCompleteSuccess);
+                                } catch {
+                                  setActionMessage(t.paymentFailed);
+                                }
+                              }}
+                            >
+                              {t.payMockDemo}
+                            </button>
+                          </div>
+                          <h4 className="billingPaymentsHead">{t.billingHistoryTitle}</h4>
+                          <div className="tableWrap">
+                            <table>
+                              <thead>
+                                <tr>
+                                  <th>{t.invoiceRef}</th>
+                                  <th>{t.amount}</th>
+                                  <th>{t.status}</th>
+                                  <th>{t.paymentDate}</th>
+                                  <th>{t.provider}</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {tenantBilling.subscription.payments.length === 0 ? (
+                                  <tr>
+                                    <td colSpan={5} className="muted">
+                                      {t.noPaymentRecords}
+                                    </td>
+                                  </tr>
+                                ) : (
+                                  tenantBilling.subscription.payments.map((row) => (
+                                    <tr key={row.id}>
+                                      <td>
+                                        <code>{paymentInvoiceLabel(row.id)}</code>
+                                      </td>
+                                      <td>
+                                        ₺{row.amount} {row.currency}
+                                      </td>
+                                      <td>
+                                        <span className="badge">{row.status}</span>
+                                      </td>
+                                      <td>
+                                        {row.paidAt
+                                          ? new Date(row.paidAt).toLocaleString(lang === 'tr' ? 'tr-TR' : 'en-US')
+                                          : new Date(row.createdAt).toLocaleString(lang === 'tr' ? 'tr-TR' : 'en-US')}
+                                      </td>
+                                      <td>
+                                        <span className="muted">{row.provider}</span>
+                                        {row.providerRef ? (
+                                          <div>
+                                            <code className="billingProviderRef">{row.providerRef}</code>
+                                          </div>
+                                        ) : null}
+                                      </td>
+                                    </tr>
+                                  ))
+                                )}
+                              </tbody>
+                            </table>
+                          </div>
+                        </>
+                      ) : (
+                        <p className="muted">{t.noSubscriptionForTenant}</p>
+                      )}
+                    </article>
+                    <article className="card">
+                      <h3>{t.landingPaymentBank}</h3>
+                      <p className="muted">{t.landingBankHint}</p>
+                      {tenantBilling.bankAccounts.length === 0 ? (
+                        <p className="muted">{t.landingBankEmpty}</p>
+                      ) : (
+                        <ul className="landingBankList">
+                          {tenantBilling.bankAccounts.map((b) => (
+                            <li key={b.id} className="landingBankItem">
+                              <strong>{b.label}</strong>
+                              <span>{b.bankName}</span>
+                              <code className="landingIban">{b.iban}</code>
+                              <span className="muted">{b.accountHolder}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      <p className="muted billingHint">{t.billingUpgradeHint}</p>
+                      <button type="button" className="ghostBtn" onClick={() => window.open('/#pricing', '_blank')}>
+                        {t.openPublicPlans}
+                      </button>
+                    </article>
+                  </>
+                ) : !billingTabLoading ? (
+                  <p className="muted">{t.noRecords}</p>
+                ) : null}
+              </section>
+            )}
+          </>
         ) : null}
 
         {tab === 'guests' ? (
           <section className="contentGrid single">
-            <article className="card wide reserveCard reserveFlow reserveFlowAdmin">
+            <article className="card wide reserveCard reserveFlow reserveFlowAdmin reserveFlow--panel">
               <div className="reserveAdminHead">
                 <h3>{t.guestScreen}</h3>
                 {selectedTenant ? (
@@ -2233,25 +3774,28 @@ export function App() {
               </div>
               {isDemoTenantId(selectedTenantId) ? <p className="muted reserveAdminDemoHint">{t.demoDataBanner}</p> : null}
 
-              <nav className="reserveStepper" aria-label="booking steps">
-                {[
-                  { step: 1, label: t.reserveStep1, target: 'guest-step-1' },
-                  { step: 2, label: t.reserveStep2, target: 'guest-step-2' },
-                  { step: 3, label: t.reserveStep3, target: 'guest-step-3' },
-                  { step: 4, label: t.reserveStep4, target: 'booking-contact' },
-                ].map(({ step, label, target }) => (
-                  <button
-                    key={target}
-                    type="button"
-                    className={`reserveStepPill ${bookingStep >= step ? 'isReached' : ''} ${bookingStep === step ? 'isActive' : ''}`}
-                    onClick={() => document.getElementById(target)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-                  >
-                    <span className="reserveStepPillNum">{step}</span>
-                    <span className="reserveStepPillLabel">{label}</span>
-                  </button>
-                ))}
-              </nav>
+              <div className="reserveStickyBar reserveStickyBar--compact">
+                <nav className="reserveStepper" aria-label="booking steps">
+                  {[
+                    { step: 1, label: t.reserveStep1, target: 'guest-step-1' },
+                    { step: 2, label: t.reserveStep2, target: 'guest-step-2' },
+                    { step: 3, label: t.reserveStep3, target: 'guest-step-3' },
+                    { step: 4, label: t.reserveStep4, target: 'booking-contact' },
+                  ].map(({ step, label, target }) => (
+                    <button
+                      key={target}
+                      type="button"
+                      className={`reserveStepPill ${bookingStep >= step ? 'isReached' : ''} ${bookingStep === step ? 'isActive' : ''}`}
+                      onClick={() => document.getElementById(target)?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+                    >
+                      <span className="reserveStepPillNum">{step}</span>
+                      <span className="reserveStepPillLabel">{label}</span>
+                    </button>
+                  ))}
+                </nav>
+              </div>
 
+              <p className="reserveUxTip muted">{t.reserveUxTip}</p>
               <p className="reserveSlotsAutoHint">{t.reserveSlotsAuto}</p>
 
               <div id="guest-step-1" className="reserveBlock">
@@ -2260,18 +3804,25 @@ export function App() {
                   {t.selectBranch}
                 </h4>
                 <div className="reserveBranchGrid">
-                  {branches.map((b) => (
-                    <button
-                      key={b.id}
-                      type="button"
-                      className={`reserveBranchCard ${guestForm.branchId === b.id ? 'isSelected' : ''}`}
-                      onClick={() => setGuestForm((s) => ({ ...s, branchId: b.id, staffUserId: '' }))}
-                    >
-                      <Building2 size={22} aria-hidden />
-                      <span className="reserveBranchName">{b.name}</span>
-                      <span className="reserveBranchCode">{b.code}</span>
-                    </button>
-                  ))}
+                  {reserveBranches.length === 0 ? (
+                    <p className="muted reserveBranchEmpty">{t.reserveNoBranches}</p>
+                  ) : (
+                    reserveBranches.map((b) => (
+                      <button
+                        key={b.id}
+                        type="button"
+                        className={`reserveBranchCard ${guestForm.branchId === b.id ? 'isSelected' : ''}`}
+                        onClick={() => setGuestForm((s) => ({ ...s, branchId: b.id, staffUserId: '', serviceId: '' }))}
+                      >
+                        <Building2 size={22} aria-hidden />
+                        <span className="reserveBranchName">{b.name}</span>
+                        <span className="reserveBranchCode">
+                          {b.code}
+                          {b.code?.toUpperCase() === 'HQ' ? <span className="reserveBranchHqBadge">{t.mainBranchBadge}</span> : null}
+                        </span>
+                      </button>
+                    ))
+                  )}
                 </div>
               </div>
 
@@ -2291,7 +3842,22 @@ export function App() {
                       <span className="reserveServiceName">{s.name}</span>
                       {s.category?.name ? <span className="reserveServiceCat">{s.category.name}</span> : null}
                       <span className="reserveServiceMeta">
-                        {s.durationMin}′ · ₺{s.priceAmount} {s.currency}
+                        {useRestaurantAreas && pricingHint?.hasRule ? (
+                          <>
+                            {s.durationMin}′ ·{' '}
+                            <span className="reserveStrike">₺{s.priceAmount}</span>{' '}
+                            <strong>₺{applyPriceHint(Number(s.priceAmount))}</strong> {s.currency}
+                            {pricingHint.label ? (
+                              <span className="reservePricingBadge" title={pricingHint.note ?? ''}>
+                                {pricingHint.label}
+                              </span>
+                            ) : null}
+                          </>
+                        ) : (
+                          <>
+                            {s.durationMin}′ · ₺{s.priceAmount} {s.currency}
+                          </>
+                        )}
                       </span>
                     </button>
                   ))}
@@ -2303,7 +3869,7 @@ export function App() {
                   <span className="reserveBlockNum">3</span>
                   {t.reserveStep3}
                 </h4>
-                <p className="reserveShiftHint">{t.shiftBreak}</p>
+                <p className="reserveShiftHint">{useRestaurantAreas ? t.restaurantAreaShiftHint : t.shiftBreak}</p>
                 <div className="reserveWeekNav">
                   <button
                     type="button"
@@ -2340,14 +3906,14 @@ export function App() {
                   <input type="date" value={guestForm.date} onChange={(e) => setGuestForm((s) => ({ ...s, date: e.target.value }))} />
                 </label>
 
-                <p className="reserveStaffPickTitle">{t.chooseStaff}</p>
-                <div className="reserveStaffChips" role="group" aria-label={t.chooseStaff}>
+                <p className="reserveStaffPickTitle">{useRestaurantAreas ? t.chooseRestaurantArea : t.chooseStaff}</p>
+                <div className="reserveStaffChips" role="group" aria-label={useRestaurantAreas ? t.chooseRestaurantArea : t.chooseStaff}>
                   <button
                     type="button"
                     className={`reserveStaffChip ${guestForm.staffUserId === '' ? 'isSelected' : ''}`}
                     onClick={() => setGuestForm((s) => ({ ...s, staffUserId: '' }))}
                   >
-                    {t.anyStaff}
+                    {useRestaurantAreas ? t.anyRestaurantArea : t.anyStaff}
                   </button>
                   {staffCalendar.map((row) => (
                     <button
@@ -2363,34 +3929,39 @@ export function App() {
                   ))}
                 </div>
 
-                <h5 className="reserveSubheading">{t.staffCalendar}</h5>
-                <div className="reserveStaffDetailGrid">
-                  {staffCalendar.map((row) => (
-                    <div key={row.staffUserId} className={`reserveStaffDetailCard ${row.offDay ? 'isOff' : ''}`}>
-                      <UserCircle2 className="reserveStaffAvatar" size={36} aria-hidden />
-                      <div className="reserveStaffDetailBody">
-                        <div className="reserveStaffDetailName">{row.staffName}</div>
-                        <div className="reserveShiftTimes">
-                          {row.shifts.length > 0
-                            ? row.shifts
-                                .map((sh) => `${new Date(sh.startsAt).toLocaleTimeString(lang === 'tr' ? 'tr-TR' : 'en-US', { hour: '2-digit', minute: '2-digit' })}–${new Date(sh.endsAt).toLocaleTimeString(lang === 'tr' ? 'tr-TR' : 'en-US', { hour: '2-digit', minute: '2-digit' })}`)
-                                .join(' · ')
-                            : '—'}
+                <details className="reserveStaffDetails">
+                  <summary className="reserveStaffDetailsSummary">
+                    {useRestaurantAreas ? t.restaurantAreaDetailsToggle : t.reserveStaffCalendarToggle}
+                  </summary>
+                  <h5 className="reserveSubheading">{useRestaurantAreas ? t.restaurantAreaCalendar : t.staffCalendar}</h5>
+                  <div className="reserveStaffDetailGrid">
+                    {staffCalendar.map((row) => (
+                      <div key={row.staffUserId} className={`reserveStaffDetailCard ${row.offDay ? 'isOff' : ''}`}>
+                        <UserCircle2 className="reserveStaffAvatar" size={36} aria-hidden />
+                        <div className="reserveStaffDetailBody">
+                          <div className="reserveStaffDetailName">{row.staffName}</div>
+                          <div className="reserveShiftTimes">
+                            {row.shifts.length > 0
+                              ? row.shifts
+                                  .map((sh) => `${new Date(sh.startsAt).toLocaleTimeString(lang === 'tr' ? 'tr-TR' : 'en-US', { hour: '2-digit', minute: '2-digit' })}–${new Date(sh.endsAt).toLocaleTimeString(lang === 'tr' ? 'tr-TR' : 'en-US', { hour: '2-digit', minute: '2-digit' })}`)
+                                  .join(' · ')
+                              : '—'}
+                          </div>
+                          <div className="reserveStaffStats">
+                            <span>
+                              {t.booked}: <strong>{row.bookedCount}</strong>
+                            </span>
+                            <span>
+                              {t.free}: <strong>{row.freeCount}</strong>
+                            </span>
+                          </div>
                         </div>
-                        <div className="reserveStaffStats">
-                          <span>
-                            {t.booked}: <strong>{row.bookedCount}</strong>
-                          </span>
-                          <span>
-                            {t.free}: <strong>{row.freeCount}</strong>
-                          </span>
-                        </div>
+                        <span className={`reserveOffBadge ${row.offDay ? 'isOff' : ''}`}>{row.offDay ? t.offDay : t.active}</span>
                       </div>
-                      <span className={`reserveOffBadge ${row.offDay ? 'isOff' : ''}`}>{row.offDay ? t.offDay : t.active}</span>
-                    </div>
-                  ))}
-                  {staffCalendar.length === 0 ? <p className="muted">{t.noRecords}</p> : null}
-                </div>
+                    ))}
+                    {staffCalendar.length === 0 ? <p className="muted">{t.noRecords}</p> : null}
+                  </div>
+                </details>
 
                 <div className="reserveSlotPanel">
                   <div className="reserveSlotPanelHead">
@@ -2403,6 +3974,7 @@ export function App() {
                       {t.reserveRefreshSlots}
                     </button>
                   </div>
+                  <p className="reservePickSlotHint">{t.reservePickSlotHint}</p>
                   {slotsLoading ? <p className="reserveSlotsLoading">{t.reserveSlotsLoading}</p> : null}
                   {!slotsLoading && availability.length === 0 && guestForm.branchId && guestForm.serviceId && guestForm.date ? (
                     <p className="muted">{t.noRecords}</p>
@@ -2416,8 +3988,8 @@ export function App() {
                           <button
                             type="button"
                             key={`adm-m-${slot.staffUserId}-${slot.startsAt}`}
-                            className="reserveSlotChip"
-                            onClick={() => void handleBookSlotPublic(slot)}
+                            className={`reserveSlotChip ${isSlotSelected(slot) ? 'isSelected' : ''}`}
+                            onClick={() => pickPublicSlot(slot)}
                           >
                             <span className="reserveSlotTime">
                               {new Date(slot.startsAt).toLocaleTimeString(lang === 'tr' ? 'tr-TR' : 'en-US', { hour: '2-digit', minute: '2-digit' })}
@@ -2436,8 +4008,8 @@ export function App() {
                           <button
                             type="button"
                             key={`adm-a-${slot.staffUserId}-${slot.startsAt}`}
-                            className="reserveSlotChip"
-                            onClick={() => void handleBookSlotPublic(slot)}
+                            className={`reserveSlotChip ${isSlotSelected(slot) ? 'isSelected' : ''}`}
+                            onClick={() => pickPublicSlot(slot)}
                           >
                             <span className="reserveSlotTime">
                               {new Date(slot.startsAt).toLocaleTimeString(lang === 'tr' ? 'tr-TR' : 'en-US', { hour: '2-digit', minute: '2-digit' })}
@@ -2456,8 +4028,8 @@ export function App() {
                           <button
                             type="button"
                             key={`adm-e-${slot.staffUserId}-${slot.startsAt}`}
-                            className="reserveSlotChip"
-                            onClick={() => void handleBookSlotPublic(slot)}
+                            className={`reserveSlotChip ${isSlotSelected(slot) ? 'isSelected' : ''}`}
+                            onClick={() => pickPublicSlot(slot)}
                           >
                             <span className="reserveSlotTime">
                               {new Date(slot.startsAt).toLocaleTimeString(lang === 'tr' ? 'tr-TR' : 'en-US', { hour: '2-digit', minute: '2-digit' })}
@@ -2471,11 +4043,42 @@ export function App() {
                 </div>
               </div>
 
-              <div id="booking-contact" className="reserveBlock">
+              <div id="booking-contact" className="reserveBlock reserveRequestBlock">
                 <h4 className="reserveBlockTitle">
                   <span className="reserveBlockNum">4</span>
-                  {t.reserveContactTitle}
+                  {t.reserveRequestTitle}
                 </h4>
+                <div className="reserveRequestSummary" aria-live="polite">
+                  <p className="reserveRequestSummaryTitle">{t.reserveSummaryTitle}</p>
+                  <ul className="reserveRequestSummaryList">
+                    <li>
+                      <span className="reserveRequestSummaryKey">{t.selectTenant}</span>
+                      <span className="reserveRequestSummaryVal">{selectedTenant?.name ?? '—'}</span>
+                    </li>
+                    <li>
+                      <span className="reserveRequestSummaryKey">{t.selectBranch}</span>
+                      <span className="reserveRequestSummaryVal">{publicReserveSummary.branchName || '—'}</span>
+                    </li>
+                    <li>
+                      <span className="reserveRequestSummaryKey">{t.selectService}</span>
+                      <span className="reserveRequestSummaryVal">
+                        {publicReserveSummary.serviceName ? `${publicReserveSummary.serviceName} (${publicReserveSummary.serviceMeta})` : '—'}
+                      </span>
+                    </li>
+                    <li>
+                      <span className="reserveRequestSummaryKey">{t.selectDate}</span>
+                      <span className="reserveRequestSummaryVal">{publicReserveSummary.dateFmt || '—'}</span>
+                    </li>
+                    <li>
+                      <span className="reserveRequestSummaryKey">{t.reservePickSlot}</span>
+                      <span className="reserveRequestSummaryVal">
+                        {pendingSlot ? `${publicReserveSummary.timeFmt} · ${publicReserveSummary.staffName}` : '—'}
+                      </span>
+                    </li>
+                  </ul>
+                </div>
+
+                <p className="reserveContactSectionLabel">{t.reserveContactTitle}</p>
                 <div className="formGrid reserveContactGrid">
                   <label className="reserveLabel">
                     {t.name}
@@ -2483,52 +4086,76 @@ export function App() {
                   </label>
                   <label className="reserveLabel">
                     {t.phone}
-                    <input type="tel" value={guestForm.customerPhone} onChange={(e) => setGuestForm((s) => ({ ...s, customerPhone: e.target.value }))} autoComplete="tel" />
+                    <input
+                      type="tel"
+                      inputMode="tel"
+                      value={guestForm.customerPhone}
+                      onChange={(e) => setGuestForm((s) => ({ ...s, customerPhone: e.target.value }))}
+                      autoComplete="tel"
+                    />
                   </label>
                   <label className="reserveLabel reserveSpan2">
                     {t.email}
                     <input type="email" value={guestForm.customerEmail} onChange={(e) => setGuestForm((s) => ({ ...s, customerEmail: e.target.value }))} autoComplete="email" />
                   </label>
                 </div>
-                <div className="reserveNotifRow">
-                  <button
-                    type="button"
-                    className="ghostBtn"
-                    onClick={async () => {
-                      if (!selectedTenantId || (!guestForm.customerPhone && !guestForm.customerEmail)) return;
-                      const qs = new URLSearchParams();
-                      if (guestForm.customerPhone) qs.set('phone', guestForm.customerPhone);
-                      if (guestForm.customerEmail) qs.set('email', guestForm.customerEmail.trim().toLowerCase());
-                      try {
-                        const rows = await apiGetWithHeaders<NotificationRow[]>(
-                          `/guest/customer-notifications?${qs.toString()}`,
-                          { 'x-tenant-id': selectedTenantId },
-                        );
-                        setCustomerNotifs(rows);
-                      } catch {
-                        setCustomerNotifs([]);
-                      }
-                    }}
-                  >
-                    {t.loadMyNotifications}
-                  </button>
-                </div>
-              </div>
 
-              <h4 className="reserveSubheading">{t.customerNotifications}</h4>
-              <div className="reserveNotifList">
-                {customerNotifs.map((n) => (
-                  <div key={n.id} className="reserveNotifCard">
-                    <span className="reserveNotifDate">{new Date(n.createdAt).toLocaleString(lang === 'tr' ? 'tr-TR' : 'en-US')}</span>
-                    <span className="reserveNotifAction">{n.action}</span>
-                    <span className="reserveNotifMeta">
-                      {typeof n.metadata === 'object' && n.metadata && 'toStatus' in n.metadata
-                        ? String((n.metadata as { toStatus?: string }).toStatus ?? '')
-                        : '—'}
-                    </span>
+                <button
+                  type="button"
+                  className="reserveSubmitBtn"
+                  disabled={
+                    reservationSubmitting ||
+                    !pendingSlot ||
+                    !guestForm.customerName.trim() ||
+                    !guestForm.customerPhone.trim()
+                  }
+                  onClick={() => void submitReservationRequest()}
+                >
+                  {reservationSubmitting ? <Loader2 size={20} className="reserveSpin" aria-hidden /> : <Send size={20} aria-hidden />}
+                  {reservationSubmitting ? t.reserveSending : t.reserveSubmit}
+                </button>
+                {!pendingSlot ? <p className="reserveSubmitHint muted">{t.reserveSelectSlotFirst}</p> : null}
+
+                <details className="reserveNotifyDetails">
+                  <summary>{t.reserveNotifyToggle}</summary>
+                  <div className="reserveNotifRow">
+                    <button
+                      type="button"
+                      className="ghostBtn"
+                      onClick={async () => {
+                        if (!selectedTenantId || (!guestForm.customerPhone && !guestForm.customerEmail)) return;
+                        const qs = new URLSearchParams();
+                        if (guestForm.customerPhone) qs.set('phone', guestForm.customerPhone);
+                        if (guestForm.customerEmail) qs.set('email', guestForm.customerEmail.trim().toLowerCase());
+                        try {
+                          const rows = await apiGetWithHeaders<NotificationRow[]>(
+                            `/guest/customer-notifications?${qs.toString()}`,
+                            { 'x-tenant-id': selectedTenantId },
+                          );
+                          setCustomerNotifs(rows);
+                        } catch {
+                          setCustomerNotifs([]);
+                        }
+                      }}
+                    >
+                      {t.loadMyNotifications}
+                    </button>
                   </div>
-                ))}
-                {customerNotifs.length === 0 ? <p className="muted">{t.noRecords}</p> : null}
+                  <div className="reserveNotifList">
+                    {customerNotifs.map((n) => (
+                      <div key={n.id} className="reserveNotifCard">
+                        <span className="reserveNotifDate">{new Date(n.createdAt).toLocaleString(lang === 'tr' ? 'tr-TR' : 'en-US')}</span>
+                        <span className="reserveNotifAction">{n.action}</span>
+                        <span className="reserveNotifMeta">
+                          {typeof n.metadata === 'object' && n.metadata && 'toStatus' in n.metadata
+                            ? String((n.metadata as { toStatus?: string }).toStatus ?? '')
+                            : '—'}
+                        </span>
+                      </div>
+                    ))}
+                    {customerNotifs.length === 0 ? <p className="muted">{t.noRecords}</p> : null}
+                  </div>
+                </details>
               </div>
             </article>
           </section>
@@ -2539,43 +4166,941 @@ export function App() {
             <article className="card wide">
               <div className="cardHead">
                 <h3>{t.employeeScreen}</h3>
-                <button className="primaryBtn" onClick={() => setEmployeeModalOpen(true)}>{t.addEmployee}</button>
+                <button className="primaryBtn" type="button" onClick={() => setUserModalMode('employee')}>
+                  {t.addEmployee}
+                </button>
               </div>
               <div className="tableWrap">
                 <table>
-                  <thead><tr><th>{t.name}</th><th>{t.role}</th><th>{t.branch}</th><th>{t.load}</th></tr></thead>
-                  <tbody>{employeeRows.map((row) => <tr key={row.fullName}><td>{row.fullName}</td><td>{row.role}</td><td>{row.branch}</td><td>{row.load}</td></tr>)}</tbody>
+                  <thead>
+                    <tr>
+                      <th>{t.name}</th>
+                      <th>{t.email}</th>
+                      <th>{t.role}</th>
+                      <th>{t.branch}</th>
+                      <th>{selectedTenantId && isDemoTenantId(selectedTenantId) ? t.load : t.specialty}</th>
+                      {selectedTenantId && !isDemoTenantId(selectedTenantId) ? <th>{t.action}</th> : null}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedTenantId && isDemoTenantId(selectedTenantId)
+                      ? employeeRows.map((row) => (
+                          <tr key={row.fullName}>
+                            <td>{row.fullName}</td>
+                            <td>—</td>
+                            <td>{row.role}</td>
+                            <td>{row.branch}</td>
+                            <td>{row.load}</td>
+                          </tr>
+                        ))
+                      : tenantUsers
+                          .filter((u) => u.isStaff)
+                          .map((u) => (
+                            <tr key={u.id}>
+                              <td>{u.fullName}</td>
+                              <td>{u.email}</td>
+                              <td>{u.userRoles.map((r) => r.role.code).join(', ') || 'STAFF'}</td>
+                              <td>{u.branch?.name ?? '—'}</td>
+                              <td>{u.staffProfile?.specialty ?? '—'}</td>
+                              <td>
+                                <button
+                                  className="ghostBtn"
+                                  type="button"
+                                  onClick={async () => {
+                                    if (!window.confirm(t.confirmDeleteUser)) return;
+                                    try {
+                                      await apiDelete(`/tenants/users/${u.id}`, { 'x-tenant-id': selectedTenantId });
+                                      setTenantUsers((prev) => prev.filter((x) => x.id !== u.id));
+                                      setActionMessage(t.userDeleted);
+                                    } catch {
+                                      setActionMessage(t.userDeleteFailed);
+                                    }
+                                  }}
+                                >
+                                  {t.delete}
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                  </tbody>
                 </table>
               </div>
             </article>
           </section>
         ) : null}
 
-        {tab === 'managers' ? <section className="contentGrid single"><article className="card wide"><h3>{t.managerScreen}</h3><div className="tableWrap"><table><thead><tr><th>{t.name}</th><th>{t.role}</th><th>{t.branch}</th><th>{t.team}</th></tr></thead><tbody>{managerRows.map((row) => <tr key={row.fullName}><td>{row.fullName}</td><td>{row.role}</td><td>{row.branch}</td><td>{row.teamSize}</td></tr>)}</tbody></table></div></article></section> : null}
+        {tab === 'managers' ? (
+          <section className="contentGrid single">
+            <article className="card wide">
+              <div className="cardHead">
+                <h3>{t.managerScreen}</h3>
+                <button className="primaryBtn" type="button" onClick={() => setUserModalMode('manager')}>
+                  {t.addManager}
+                </button>
+              </div>
+              <div className="tableWrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>{t.name}</th>
+                      <th>{t.email}</th>
+                      <th>{t.role}</th>
+                      <th>{t.branch}</th>
+                      {selectedTenantId && isDemoTenantId(selectedTenantId) ? <th>{t.team}</th> : null}
+                      {selectedTenantId && !isDemoTenantId(selectedTenantId) ? <th>{t.action}</th> : null}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedTenantId && isDemoTenantId(selectedTenantId)
+                      ? managerRows.map((row) => (
+                          <tr key={row.fullName}>
+                            <td>{row.fullName}</td>
+                            <td>—</td>
+                            <td>{row.role}</td>
+                            <td>{row.branch}</td>
+                            <td>{row.teamSize}</td>
+                          </tr>
+                        ))
+                      : tenantUsers
+                          .filter((u) => !u.isStaff)
+                          .map((u) => (
+                            <tr key={u.id}>
+                              <td>{u.fullName}</td>
+                              <td>{u.email}</td>
+                              <td>{u.userRoles.map((r) => r.role.code).join(', ') || 'ADMIN'}</td>
+                              <td>{u.branch?.name ?? '—'}</td>
+                              <td>
+                                <button
+                                  className="ghostBtn"
+                                  type="button"
+                                  onClick={async () => {
+                                    if (!window.confirm(t.confirmDeleteUser)) return;
+                                    try {
+                                      await apiDelete(`/tenants/users/${u.id}`, { 'x-tenant-id': selectedTenantId });
+                                      setTenantUsers((prev) => prev.filter((x) => x.id !== u.id));
+                                      setActionMessage(t.userDeleted);
+                                    } catch {
+                                      setActionMessage(t.userDeleteFailed);
+                                    }
+                                  }}
+                                >
+                                  {t.delete}
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                  </tbody>
+                </table>
+              </div>
+            </article>
+          </section>
+        ) : null}
 
         {tab === 'companyRoles' ? <section className="contentGrid single"><article className="card wide"><h3>{t.companyRoles}</h3><div className="formGrid"><label>{t.roleCode}<input value={roleForm.code} onChange={(e) => setRoleForm((s) => ({ ...s, code: e.target.value }))} placeholder="CMP_MANAGER" /></label><label>{t.roleName}<input value={roleForm.name} onChange={(e) => setRoleForm((s) => ({ ...s, name: e.target.value }))} /></label><label>{t.roleDesc}<input value={roleForm.description} onChange={(e) => setRoleForm((s) => ({ ...s, description: e.target.value }))} /></label></div><div className="modalActions"><button className="primaryBtn" onClick={async () => { if (!selectedTenantId || !roleForm.code || !roleForm.name) return; try { await apiPost('/tenants/roles', roleForm, { 'x-tenant-id': selectedTenantId }); const roleRows = await apiGetWithHeaders<RoleRow[]>('/tenants/roles', { 'x-tenant-id': selectedTenantId }); setRoles(roleRows); setRoleForm({ code: '', name: '', description: '' }); } catch { setActionMessage(t.serviceCreateFailed); } }}>{t.addRole}</button></div><div className="tableWrap"><table><thead><tr><th>{t.roleCode}</th><th>{t.roleName}</th><th>{t.description}</th></tr></thead><tbody>{roles.filter((r) => r.code.startsWith('CMP_')).map((row) => <tr key={row.id}><td>{row.code}</td><td>{row.name}</td><td>{row.description}</td></tr>)}</tbody></table></div></article></section> : null}
         {tab === 'franchiseRoles' ? <section className="contentGrid single"><article className="card wide"><h3>{t.franchiseRoles}</h3><div className="tableWrap"><table><thead><tr><th>{t.roleCode}</th><th>{t.roleName}</th><th>{t.description}</th></tr></thead><tbody>{roles.filter((r) => r.code.startsWith('FRA_')).map((row) => <tr key={row.id}><td>{row.code}</td><td>{row.name}</td><td>{row.description}</td></tr>)}{roles.filter((r) => r.code.startsWith('FRA_')).length === 0 ? <tr><td colSpan={3} className="muted">{t.noRecords}</td></tr> : null}</tbody></table></div></article></section> : null}
         {tab === 'subRoles' ? <section className="contentGrid single"><article className="card wide"><h3>{t.subRoles}</h3><div className="tableWrap"><table><thead><tr><th>{t.roleCode}</th><th>{t.roleName}</th><th>{t.description}</th></tr></thead><tbody>{roles.filter((r) => r.code.startsWith('SUB_')).map((row) => <tr key={row.id}><td>{row.code}</td><td>{row.name}</td><td>{row.description}</td></tr>)}{roles.filter((r) => r.code.startsWith('SUB_')).length === 0 ? <tr><td colSpan={3} className="muted">{t.noRecords}</td></tr> : null}</tbody></table></div></article></section> : null}
 
-        {tab === 'services' ? <section className="contentGrid single"><article className="card wide"><h3>{t.servicesCatalog}</h3><div className="formGrid"><label>{t.branch}<select value={serviceForm.branchId} onChange={(e) => setServiceForm((s) => ({ ...s, branchId: e.target.value }))}>{branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select></label><label>{t.category}<input value={serviceForm.categoryName} onChange={(e) => setServiceForm((s) => ({ ...s, categoryName: e.target.value }))} /></label><label>{t.name}<input value={serviceForm.name} onChange={(e) => setServiceForm((s) => ({ ...s, name: e.target.value }))} /></label><label>{t.duration}<input type="number" value={serviceForm.durationMin} onChange={(e) => setServiceForm((s) => ({ ...s, durationMin: Number(e.target.value) }))} /></label><label>{t.amount}<input type="number" value={serviceForm.priceAmount} onChange={(e) => setServiceForm((s) => ({ ...s, priceAmount: Number(e.target.value) }))} /></label><label>{t.currency}<input value={serviceForm.currency} onChange={(e) => setServiceForm((s) => ({ ...s, currency: e.target.value }))} /></label></div><div className="modalActions"><button className="ghostBtn" onClick={async () => { try { await apiPost('/tenants/settings/currency', { currency: currencyForm }, { 'x-tenant-id': selectedTenantId }); setActionMessage(t.currencyUpdated); } catch { setActionMessage(t.currencyUpdateFailed); } }}>{t.save} {t.currency}</button><input value={currencyForm} onChange={(e) => setCurrencyForm(e.target.value)} /><button className="primaryBtn" onClick={async () => { try { await apiPost('/services', serviceForm, { 'x-tenant-id': selectedTenantId }); setActionMessage(t.serviceCreated); } catch { setActionMessage(t.serviceCreateFailed); } }}>{t.save}</button></div><div className="tableWrap"><table><thead><tr><th>{t.name}</th><th>{t.category}</th><th>{t.duration}</th><th>{t.amount}</th></tr></thead><tbody>{branchServices.map((row) => <tr key={row.id}><td>{row.name}</td><td>{row.category?.name ?? '-'}</td><td>{row.durationMin}</td><td>{row.priceAmount} {row.currency}</td></tr>)}</tbody></table></div></article></section> : null}
+        {tab === 'services' ? (
+          <section className="contentGrid single">
+            <article className="card wide">
+              <h3>{t.servicesCatalog}</h3>
+              <div className="formGrid">
+                <label>
+                  {t.branch}
+                  <select
+                    value={serviceForm.branchId}
+                    onChange={(e) => setServiceForm((s) => ({ ...s, branchId: e.target.value }))}
+                  >
+                    {branches.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  {t.category}
+                  <input
+                    value={serviceForm.categoryName}
+                    onChange={(e) => setServiceForm((s) => ({ ...s, categoryName: e.target.value }))}
+                  />
+                </label>
+                <label>
+                  {t.name}
+                  <input value={serviceForm.name} onChange={(e) => setServiceForm((s) => ({ ...s, name: e.target.value }))} />
+                </label>
+                <label>
+                  {t.duration}
+                  <input
+                    type="number"
+                    value={serviceForm.durationMin}
+                    onChange={(e) => setServiceForm((s) => ({ ...s, durationMin: Number(e.target.value) }))}
+                  />
+                </label>
+                <label>
+                  {t.amount}
+                  <input
+                    type="number"
+                    value={serviceForm.priceAmount}
+                    onChange={(e) => setServiceForm((s) => ({ ...s, priceAmount: Number(e.target.value) }))}
+                  />
+                </label>
+                <label>
+                  {t.currency}
+                  <input value={serviceForm.currency} onChange={(e) => setServiceForm((s) => ({ ...s, currency: e.target.value }))} />
+                </label>
+              </div>
+              <div className="modalActions">
+                <button
+                  className="ghostBtn"
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await apiPost('/tenants/settings/currency', { currency: currencyForm }, { 'x-tenant-id': selectedTenantId });
+                      setActionMessage(t.currencyUpdated);
+                    } catch {
+                      setActionMessage(t.currencyUpdateFailed);
+                    }
+                  }}
+                >
+                  {t.save} {t.currency}
+                </button>
+                <input value={currencyForm} onChange={(e) => setCurrencyForm(e.target.value)} />
+                <button
+                  className="primaryBtn"
+                  type="button"
+                  disabled={!selectedTenantId || isDemoTenantId(selectedTenantId)}
+                  onClick={async () => {
+                    if (!selectedTenantId || isDemoTenantId(selectedTenantId)) return;
+                    try {
+                      await apiPost('/services', serviceForm, { 'x-tenant-id': selectedTenantId });
+                      const rows = await apiGetWithHeaders<ServiceLite[]>(
+                        `/services?branchId=${serviceForm.branchId}`,
+                        { 'x-tenant-id': selectedTenantId },
+                      );
+                      setBranchServices(rows);
+                      setActionMessage(t.serviceCreated);
+                    } catch {
+                      setActionMessage(t.serviceCreateFailed);
+                    }
+                  }}
+                >
+                  {t.save}
+                </button>
+              </div>
+              <div className="tableWrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>{t.name}</th>
+                      <th>{t.category}</th>
+                      <th>{t.duration}</th>
+                      <th>{t.amount}</th>
+                      <th>{t.action}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {branchServices.map((row) => (
+                      <tr key={row.id}>
+                        <td>{row.name}</td>
+                        <td>{row.category?.name ?? '-'}</td>
+                        <td>{row.durationMin}</td>
+                        <td>
+                          {row.priceAmount} {row.currency}
+                        </td>
+                        <td>
+                          <div className="actionBtns">
+                            <button
+                              className="ghostBtn"
+                              type="button"
+                              disabled={isDemoTenantId(selectedTenantId)}
+                              onClick={() =>
+                                setServiceEditDraft({
+                                  id: row.id,
+                                  name: row.name,
+                                  durationMin: row.durationMin,
+                                  priceAmount: Number(row.priceAmount),
+                                })
+                              }
+                            >
+                              {t.edit}
+                            </button>
+                            <button
+                              className="ghostBtn"
+                              type="button"
+                              disabled={isDemoTenantId(selectedTenantId)}
+                              onClick={async () => {
+                                if (!window.confirm(t.confirmDeleteService)) return;
+                                try {
+                                  await apiDelete(`/services/${row.id}`, { 'x-tenant-id': selectedTenantId });
+                                  const rows = await apiGetWithHeaders<ServiceLite[]>(
+                                    `/services?branchId=${serviceForm.branchId}`,
+                                    { 'x-tenant-id': selectedTenantId },
+                                  );
+                                  setBranchServices(rows);
+                                  setActionMessage(t.serviceDeleted);
+                                } catch {
+                                  setActionMessage(t.serviceDeleteFailed);
+                                }
+                              }}
+                            >
+                              {t.delete}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </article>
+          </section>
+        ) : null}
 
-        {tab === 'assignment' ? <section className="contentGrid single"><article className="card wide"><h3>{t.reservationAssign}</h3><div className="modalActions"><label>{t.reservationStatus}<select value={reservationStatusFilter} onChange={(e) => setReservationStatusFilter(e.target.value as ReservationStatusFilter)}><option value="ALL">{t.all}</option><option value="PENDING">PENDING</option><option value="CONFIRMED">CONFIRMED</option><option value="IN_PROGRESS">IN_PROGRESS</option><option value="COMPLETED">COMPLETED</option></select></label></div><div className="tableWrap"><table><thead><tr><th>{t.name}</th><th>{t.reservation}</th><th>{t.employees}</th><th>{t.branch}</th><th>{t.status}</th><th>{t.action}</th></tr></thead><tbody>{reservations.map((row) => <tr key={row.id}><td>{row.customer.fullName}</td><td>{row.service.name} / {new Date(row.startsAt).toLocaleString()}</td><td>{row.staffUser.fullName}</td><td>{row.branch.name}</td><td><span className="badge">{row.status}</span></td><td><div className="actionBtns"><button className="ghostBtn" disabled={!canApprove(row.status)} onClick={async () => { try { await apiPost(`/employee/reservations/${row.id}/approve`, { changedByEmail: actorEmail }, { 'x-tenant-id': selectedTenantId }); const reservationQuery = reservationStatusFilter === 'ALL' ? '' : `?status=${reservationStatusFilter}`; const reservationRows = await apiGetWithHeaders<ReservationRow[]>(`/employee/reservations${reservationQuery}`, { 'x-tenant-id': selectedTenantId }); setReservations(reservationRows); setActionMessage(`${t.approved}: ${row.id}`); } catch { setActionMessage(t.approveFailed); } }}>{t.approve}</button><button className="ghostBtn" disabled={!canStart(row.status)} onClick={async () => { try { await apiPost(`/employee/reservations/${row.id}/start`, { changedByEmail: actorEmail }, { 'x-tenant-id': selectedTenantId }); const reservationQuery = reservationStatusFilter === 'ALL' ? '' : `?status=${reservationStatusFilter}`; const reservationRows = await apiGetWithHeaders<ReservationRow[]>(`/employee/reservations${reservationQuery}`, { 'x-tenant-id': selectedTenantId }); setReservations(reservationRows); setActionMessage(`${t.started}: ${row.id}`); } catch { setActionMessage(t.startFailed); } }}>{t.start}</button><button className="primaryBtn" disabled={!canComplete(row.status)} onClick={async () => { try { await apiPost(`/employee/reservations/${row.id}/complete`, { changedByEmail: actorEmail }, { 'x-tenant-id': selectedTenantId }); const reservationQuery = reservationStatusFilter === 'ALL' ? '' : `?status=${reservationStatusFilter}`; const ledgerQuery = ledgerTypeFilter === 'ALL' ? '' : `?type=${ledgerTypeFilter}`; const [reservationRows, ledgerRows] = await Promise.all([apiGetWithHeaders<ReservationRow[]>(`/employee/reservations${reservationQuery}`, { 'x-tenant-id': selectedTenantId }), apiGetWithHeaders<LedgerEntry[]>(`/accounting/ledger${ledgerQuery}`, { 'x-tenant-id': selectedTenantId })]); setReservations(reservationRows); setLedger(ledgerRows); setActionMessage(`${t.completedAndAccounted}: ${row.id}`); } catch { setActionMessage(t.completeFailed); } }}>{t.complete}</button></div></td></tr>)}{reservations.length === 0 ? <tr><td colSpan={6} className="muted">{t.noRecords}</td></tr> : null}</tbody></table></div></article></section> : null}
+        {tab === 'assignment' ? (
+          <section className="contentGrid single">
+            <article className="card wide">
+              <h3>{t.reservationAssign}</h3>
+              <div className="modalActions">
+                <label>
+                  {t.reservationStatus}
+                  <select
+                    value={reservationStatusFilter}
+                    onChange={(e) => setReservationStatusFilter(e.target.value as ReservationStatusFilter)}
+                  >
+                    <option value="ALL">{t.all}</option>
+                    <option value="PENDING">PENDING</option>
+                    <option value="CONFIRMED">CONFIRMED</option>
+                    <option value="IN_PROGRESS">IN_PROGRESS</option>
+                    <option value="COMPLETED">COMPLETED</option>
+                    <option value="CANCELLED">CANCELLED</option>
+                  </select>
+                </label>
+              </div>
+              <div className="tableWrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>{t.name}</th>
+                      <th>{t.reservation}</th>
+                      <th>{useRestaurantAreas ? t.chooseRestaurantArea : t.employees}</th>
+                      <th>{t.branch}</th>
+                      <th>{t.status}</th>
+                      <th>{t.action}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {reservations.map((row) => (
+                      <tr key={row.id}>
+                        <td>{row.customer.fullName}</td>
+                        <td>
+                          {row.service.name} / {new Date(row.startsAt).toLocaleString()}
+                        </td>
+                        <td>
+                          {row.staffUser?.fullName ??
+                            (row.restaurantArea?.name ? `${row.restaurantArea.name}${row.restaurantArea.code ? ` (${row.restaurantArea.code})` : ''}` : '—')}
+                        </td>
+                        <td>{row.branch.name}</td>
+                        <td>
+                          <span className="badge">{row.status}</span>
+                        </td>
+                        <td>
+                          <div className="actionBtns">
+                            <button
+                              className="ghostBtn"
+                              type="button"
+                              disabled={!canApprove(row.status)}
+                              onClick={async () => {
+                                try {
+                                  await apiPost(
+                                    `/employee/reservations/${row.id}/approve`,
+                                    { changedByEmail: actorEmail },
+                                    { 'x-tenant-id': selectedTenantId },
+                                  );
+                                  const reservationQuery =
+                                    reservationStatusFilter === 'ALL' ? '' : `?status=${reservationStatusFilter}`;
+                                  const reservationRows = await apiGetWithHeaders<ReservationRow[]>(
+                                    `/employee/reservations${reservationQuery}`,
+                                    { 'x-tenant-id': selectedTenantId },
+                                  );
+                                  setReservations(reservationRows);
+                                  setActionMessage(`${t.approved}: ${row.id}`);
+                                } catch {
+                                  setActionMessage(t.approveFailed);
+                                }
+                              }}
+                            >
+                              {t.approve}
+                            </button>
+                            <button
+                              className="ghostBtn"
+                              type="button"
+                              disabled={!canStart(row.status)}
+                              onClick={async () => {
+                                try {
+                                  await apiPost(
+                                    `/employee/reservations/${row.id}/start`,
+                                    { changedByEmail: actorEmail },
+                                    { 'x-tenant-id': selectedTenantId },
+                                  );
+                                  const reservationQuery =
+                                    reservationStatusFilter === 'ALL' ? '' : `?status=${reservationStatusFilter}`;
+                                  const reservationRows = await apiGetWithHeaders<ReservationRow[]>(
+                                    `/employee/reservations${reservationQuery}`,
+                                    { 'x-tenant-id': selectedTenantId },
+                                  );
+                                  setReservations(reservationRows);
+                                  setActionMessage(`${t.started}: ${row.id}`);
+                                } catch {
+                                  setActionMessage(t.startFailed);
+                                }
+                              }}
+                            >
+                              {t.start}
+                            </button>
+                            <button
+                              className="primaryBtn"
+                              type="button"
+                              disabled={!canComplete(row.status)}
+                              onClick={async () => {
+                                try {
+                                  await apiPost(
+                                    `/employee/reservations/${row.id}/complete`,
+                                    { changedByEmail: actorEmail },
+                                    { 'x-tenant-id': selectedTenantId },
+                                  );
+                                  const reservationQuery =
+                                    reservationStatusFilter === 'ALL' ? '' : `?status=${reservationStatusFilter}`;
+                                  const ledgerQuery = ledgerTypeFilter === 'ALL' ? '' : `?type=${ledgerTypeFilter}`;
+                                  const [reservationRows, ledgerRows] = await Promise.all([
+                                    apiGetWithHeaders<ReservationRow[]>(`/employee/reservations${reservationQuery}`, {
+                                      'x-tenant-id': selectedTenantId,
+                                    }),
+                                    apiGetWithHeaders<LedgerEntry[]>(`/accounting/ledger${ledgerQuery}`, {
+                                      'x-tenant-id': selectedTenantId,
+                                    }),
+                                  ]);
+                                  setReservations(reservationRows);
+                                  setLedger(ledgerRows);
+                                  setActionMessage(`${t.completedAndAccounted}: ${row.id}`);
+                                } catch {
+                                  setActionMessage(t.completeFailed);
+                                }
+                              }}
+                            >
+                              {t.complete}
+                            </button>
+                            <button
+                              className="ghostBtn"
+                              type="button"
+                              disabled={!canCancelReservation(row.status)}
+                              onClick={async () => {
+                                if (!window.confirm(t.confirmCancelReservation)) return;
+                                try {
+                                  await apiPost(
+                                    `/employee/reservations/${row.id}/cancel`,
+                                    { changedByEmail: actorEmail },
+                                    { 'x-tenant-id': selectedTenantId },
+                                  );
+                                  const reservationQuery =
+                                    reservationStatusFilter === 'ALL' ? '' : `?status=${reservationStatusFilter}`;
+                                  const reservationRows = await apiGetWithHeaders<ReservationRow[]>(
+                                    `/employee/reservations${reservationQuery}`,
+                                    { 'x-tenant-id': selectedTenantId },
+                                  );
+                                  setReservations(reservationRows);
+                                  setActionMessage(t.reservationCancelled);
+                                } catch {
+                                  setActionMessage(t.cancelFailed);
+                                }
+                              }}
+                            >
+                              {t.cancelReservation}
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {reservations.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="muted">
+                          {t.noRecords}
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            </article>
+          </section>
+        ) : null}
 
         {tab === 'operations' ? (
           <section className="contentGrid single">
+            <article className="card wide">
+              <h3>{t.operationsBranches}</h3>
+              {selectedTenantId && isDemoTenantId(selectedTenantId) ? (
+                <p className="muted">{t.demoReadOnly}</p>
+              ) : (
+                <>
+                  <div className="formGrid">
+                    <label>
+                      {t.name}
+                      <input
+                        value={branchCrudForm.name}
+                        onChange={(e) => setBranchCrudForm((s) => ({ ...s, name: e.target.value }))}
+                      />
+                    </label>
+                    <label>
+                      {t.branchCode}
+                      <input
+                        value={branchCrudForm.code}
+                        onChange={(e) => setBranchCrudForm((s) => ({ ...s, code: e.target.value }))}
+                      />
+                    </label>
+                    <label>
+                      {t.city}
+                      <input
+                        value={branchCrudForm.city}
+                        onChange={(e) => setBranchCrudForm((s) => ({ ...s, city: e.target.value }))}
+                      />
+                    </label>
+                  </div>
+                  <div className="modalActions">
+                    <button
+                      className="primaryBtn"
+                      type="button"
+                      disabled={!selectedTenantId || !branchCrudForm.name || !branchCrudForm.code}
+                      onClick={async () => {
+                        if (!selectedTenantId) return;
+                        try {
+                          await apiPost(
+                            '/branches',
+                            { name: branchCrudForm.name.trim(), code: branchCrudForm.code.trim().toUpperCase(), city: branchCrudForm.city || undefined },
+                            { 'x-tenant-id': selectedTenantId },
+                          );
+                          await refreshBranches();
+                          setBranchCrudForm({ name: '', code: '', city: '' });
+                          setActionMessage(t.branchCreated);
+                        } catch {
+                          setActionMessage(t.branchCreateFailed);
+                        }
+                      }}
+                    >
+                      {t.addBranch}
+                    </button>
+                  </div>
+                </>
+              )}
+              <div className="tableWrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>{t.name}</th>
+                      <th>{t.branchCode}</th>
+                      <th>{t.action}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {branches.map((b) => (
+                      <tr key={b.id}>
+                        <td>{b.name}</td>
+                        <td>
+                          <code>{b.code}</code>
+                        </td>
+                        <td>
+                          <button
+                            className="ghostBtn"
+                            type="button"
+                            disabled={!selectedTenantId || isDemoTenantId(selectedTenantId)}
+                            onClick={async () => {
+                              if (!window.confirm(t.confirmDeleteBranch)) return;
+                              try {
+                                await apiDelete(`/branches/${b.id}`, { 'x-tenant-id': selectedTenantId });
+                                await refreshBranches();
+                                if (opsBranchId === b.id) {
+                                  setOpsBranchId('');
+                                }
+                                setActionMessage(t.branchDeleted);
+                              } catch {
+                                setActionMessage(t.branchDeleteFailed);
+                              }
+                            }}
+                          >
+                            {t.delete}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </article>
+
+            {useRestaurantAreas ? (
+              <article className="card wide opsRestaurantCard">
+                <div className="cardHead">
+                  <h3>
+                    <Utensils size={20} strokeWidth={1.85} aria-hidden className="opsRestaurantTitleIcon" />
+                    {t.restaurantOpsPricingTitle}
+                  </h3>
+                </div>
+                <p className="muted">{t.restaurantOpsPricingLead}</p>
+                <p className="opsRestaurantFreePaid">{t.restaurantOpsFreeVsPaid}</p>
+                {selectedTenantId && isDemoTenantId(selectedTenantId) ? (
+                  <>
+                    <div className="demoPricingBanner">
+                      <p className="muted">{t.restaurantPricingDemoHint}</p>
+                      <p>
+                        <strong>{t.demoSpecialDateLabel}:</strong>{' '}
+                        <code className="demoPricingDateCode">{getDemoSpecialPricingDateYmd()}</code>
+                      </p>
+                    </div>
+                    <div className="restaurantPricingRulesSection">
+                      <h4 className="restaurantPricingRulesTitle">{t.restaurantPricingRulesHead}</h4>
+                      <p className="muted">{t.restaurantPricingRulesDemoOnly}</p>
+                      <div className="tableWrap">
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>{t.restaurantPricingColDate}</th>
+                              <th>{t.restaurantPricingColLabel}</th>
+                              <th>{t.restaurantPricingColExtra}</th>
+                              <th>{t.restaurantPricingColActive}</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr>
+                              <td>
+                                <code>{getDemoSpecialPricingDateYmd()}</code>
+                              </td>
+                              <td>{lang === 'tr' ? 'Önemli gün (demo)' : 'Special day (demo)'}</td>
+                              <td>%15</td>
+                              <td>
+                                <span className="badge">{t.active}</span>
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="formGrid">
+                      <label>
+                        {t.branch}
+                        <select
+                          value={restaurantPricingForm.branchId}
+                          onChange={(e) => setRestaurantPricingForm((s) => ({ ...s, branchId: e.target.value }))}
+                        >
+                          {branches.map((b) => (
+                            <option key={b.id} value={b.id}>
+                              {b.name}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        {t.restaurantPricingDate}
+                        <input
+                          type="date"
+                          value={restaurantPricingForm.dateYmd}
+                          onChange={(e) => setRestaurantPricingForm((s) => ({ ...s, dateYmd: e.target.value }))}
+                        />
+                      </label>
+                      <label>
+                        {t.restaurantPricingSurcharge}
+                        <input
+                          type="number"
+                          min={0}
+                          step={0.5}
+                          value={restaurantPricingForm.surchargePercent}
+                          onChange={(e) => setRestaurantPricingForm((s) => ({ ...s, surchargePercent: e.target.value }))}
+                        />
+                      </label>
+                      <label>
+                        {t.restaurantPricingExtra}
+                        <input
+                          type="number"
+                          min={0}
+                          step={1}
+                          value={restaurantPricingForm.extraAmount}
+                          onChange={(e) => setRestaurantPricingForm((s) => ({ ...s, extraAmount: e.target.value }))}
+                        />
+                      </label>
+                      <label>
+                        {t.restaurantPricingLabel}
+                        <input
+                          value={restaurantPricingForm.label}
+                          onChange={(e) => setRestaurantPricingForm((s) => ({ ...s, label: e.target.value }))}
+                        />
+                      </label>
+                      <label className="reserveSpan2">
+                        {t.restaurantPricingNote}
+                        <input
+                          value={restaurantPricingForm.note}
+                          onChange={(e) => setRestaurantPricingForm((s) => ({ ...s, note: e.target.value }))}
+                        />
+                      </label>
+                    </div>
+                    <div className="modalActions">
+                      <button
+                        type="button"
+                        className="primaryBtn"
+                        disabled={
+                          !selectedTenantId ||
+                          !restaurantPricingForm.branchId ||
+                          !restaurantPricingForm.dateYmd ||
+                          isDemoTenantId(selectedTenantId)
+                        }
+                        onClick={async () => {
+                          if (!selectedTenantId || !restaurantPricingForm.branchId || !restaurantPricingForm.dateYmd) return;
+                          try {
+                            await apiPost(
+                              '/employee/branch-pricing-day',
+                              {
+                                branchId: restaurantPricingForm.branchId,
+                                dateYmd: restaurantPricingForm.dateYmd,
+                                label: restaurantPricingForm.label || undefined,
+                                surchargePercent:
+                                  restaurantPricingForm.surchargePercent === ''
+                                    ? null
+                                    : Number(restaurantPricingForm.surchargePercent),
+                                extraAmount:
+                                  restaurantPricingForm.extraAmount === '' ? null : Number(restaurantPricingForm.extraAmount),
+                                note: restaurantPricingForm.note || null,
+                              },
+                              { 'x-tenant-id': selectedTenantId },
+                            );
+                            setActionMessage(t.restaurantPricingSaved);
+                            void reloadBranchPricingDays();
+                          } catch {
+                            setActionMessage(t.restaurantPricingFailed);
+                          }
+                        }}
+                      >
+                        {t.restaurantPricingSave}
+                      </button>
+                    </div>
+                    <div className="restaurantPricingRulesSection">
+                      <div className="restaurantPricingRulesToolbar">
+                        <h4 className="restaurantPricingRulesTitle">{t.restaurantPricingRulesHead}</h4>
+                        <button
+                          type="button"
+                          className="ghostBtn"
+                          onClick={() => void reloadBranchPricingDays()}
+                          disabled={branchPricingDaysLoading || !restaurantPricingForm.branchId}
+                        >
+                          <RefreshCw size={16} className={branchPricingDaysLoading ? 'reserveSpin' : ''} aria-hidden />
+                          {t.restaurantPricingRulesRefresh}
+                        </button>
+                      </div>
+                      {branchPricingDaysLoading ? <p className="muted">{t.loading}</p> : null}
+                      {!branchPricingDaysLoading && branchPricingDays.length === 0 ? (
+                        <p className="muted">{t.restaurantPricingRulesEmpty}</p>
+                      ) : null}
+                      {!branchPricingDaysLoading && branchPricingDays.length > 0 ? (
+                        <div className="tableWrap">
+                          <table>
+                            <thead>
+                              <tr>
+                                <th>{t.restaurantPricingColDate}</th>
+                                <th>{t.restaurantPricingColLabel}</th>
+                                <th>{t.restaurantPricingColExtra}</th>
+                                <th>{t.restaurantPricingColActive}</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {branchPricingDays.map((row) => (
+                                <tr key={row.id}>
+                                  <td>
+                                    <code>{row.date}</code>
+                                  </td>
+                                  <td>{row.label ?? '—'}</td>
+                                  <td>
+                                    {[
+                                      row.surchargePercent != null ? `%${row.surchargePercent}` : null,
+                                      row.extraAmount != null ? `₺${row.extraAmount}` : null,
+                                    ]
+                                      .filter(Boolean)
+                                      .join(' + ') || '—'}
+                                  </td>
+                                  <td>
+                                    <span className="badge">{row.isActive ? t.yes : t.no}</span>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : null}
+                    </div>
+                  </>
+                )}
+              </article>
+            ) : null}
+
+            <article className="card wide">
+              <h3>{t.operationsSchedules}</h3>
+              {selectedTenantId && isDemoTenantId(selectedTenantId) ? (
+                <p className="muted">{t.demoReadOnly}</p>
+              ) : (
+                <>
+                  <div className="modalActions">
+                    <label>
+                      {t.branch}
+                      <select value={opsBranchId} onChange={(e) => setOpsBranchId(e.target.value)}>
+                        <option value="">{t.selectBranch}</option>
+                        {branches.map((b) => (
+                          <option key={b.id} value={b.id}>
+                            {b.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="formGrid">
+                    <label>
+                      {t.staff}
+                      <select
+                        value={scheduleCreateForm.staffUserId}
+                        onChange={(e) => setScheduleCreateForm((s) => ({ ...s, staffUserId: e.target.value }))}
+                      >
+                        <option value="">{t.chooseStaff}</option>
+                        {staffUserOptions.map((staff) => (
+                          <option key={staff.id} value={staff.id}>
+                            {staff.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      {t.scheduleStart}
+                      <input
+                        type="datetime-local"
+                        value={scheduleCreateForm.startsAt}
+                        onChange={(e) => setScheduleCreateForm((s) => ({ ...s, startsAt: e.target.value }))}
+                      />
+                    </label>
+                    <label>
+                      {t.scheduleEnd}
+                      <input
+                        type="datetime-local"
+                        value={scheduleCreateForm.endsAt}
+                        onChange={(e) => setScheduleCreateForm((s) => ({ ...s, endsAt: e.target.value }))}
+                      />
+                    </label>
+                  </div>
+                  <div className="modalActions">
+                    <button
+                      className="primaryBtn"
+                      type="button"
+                      disabled={
+                        !selectedTenantId ||
+                        !opsBranchId ||
+                        !scheduleCreateForm.staffUserId ||
+                        !scheduleCreateForm.startsAt ||
+                        !scheduleCreateForm.endsAt
+                      }
+                      onClick={async () => {
+                        if (!selectedTenantId || !opsBranchId) return;
+                        try {
+                          await apiPost(
+                            '/schedules',
+                            {
+                              branchId: opsBranchId,
+                              staffUserId: scheduleCreateForm.staffUserId,
+                              startsAt: new Date(scheduleCreateForm.startsAt).toISOString(),
+                              endsAt: new Date(scheduleCreateForm.endsAt).toISOString(),
+                            },
+                            { 'x-tenant-id': selectedTenantId },
+                          );
+                          await reloadSchedules();
+                          setScheduleCreateForm({ staffUserId: '', startsAt: '', endsAt: '' });
+                          setActionMessage(t.scheduleCreated);
+                        } catch {
+                          setActionMessage(t.scheduleCreateFailed);
+                        }
+                      }}
+                    >
+                      {t.addSchedule}
+                    </button>
+                  </div>
+                </>
+              )}
+              <div className="tableWrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>{t.staff}</th>
+                      <th>{t.branch}</th>
+                      <th>{t.time}</th>
+                      <th>{t.action}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {scheduleRows.map((s) => (
+                      <tr key={s.id}>
+                        <td>{s.staffUser.fullName}</td>
+                        <td>{s.branch.name}</td>
+                        <td>
+                          {new Date(s.startsAt).toLocaleString()} → {new Date(s.endsAt).toLocaleString()}
+                        </td>
+                        <td>
+                          <button
+                            className="ghostBtn"
+                            type="button"
+                            disabled={!selectedTenantId || isDemoTenantId(selectedTenantId)}
+                            onClick={async () => {
+                              if (!window.confirm(t.confirmDeleteSchedule)) return;
+                              try {
+                                await apiDelete(`/schedules/${s.id}`, { 'x-tenant-id': selectedTenantId });
+                                await reloadSchedules();
+                                setActionMessage(t.scheduleDeleted);
+                              } catch {
+                                setActionMessage(t.scheduleDeleteFailed);
+                              }
+                            }}
+                          >
+                            {t.delete}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {scheduleRows.length === 0 ? (
+                      <tr>
+                        <td colSpan={4} className="muted">
+                          {t.noRecords}
+                        </td>
+                      </tr>
+                    ) : null}
+                  </tbody>
+                </table>
+              </div>
+            </article>
+
             <article className="card wide">
               <h3>{t.staffNotifications}</h3>
               <div className="modalActions">
                 <select value={selectedStaffId} onChange={(e) => setSelectedStaffId(e.target.value)}>
                   <option value="">{t.chooseStaff}</option>
-                  {staffOptions.map((staff) => <option key={staff.id} value={staff.id}>{staff.name}</option>)}
+                  {opsStaffSelect.map((staff) => (
+                    <option key={staff.id} value={staff.id}>
+                      {staff.name}
+                    </option>
+                  ))}
                 </select>
                 <button
                   className="ghostBtn"
+                  type="button"
                   onClick={async () => {
                     if (!selectedTenantId || !selectedStaffId) return;
                     try {
-                      const rows = await apiGetWithHeaders<NotificationRow[]>(`/employee/notifications?staffUserId=${selectedStaffId}`, { 'x-tenant-id': selectedTenantId });
+                      const rows = await apiGetWithHeaders<NotificationRow[]>(
+                        `/employee/notifications?staffUserId=${selectedStaffId}`,
+                        { 'x-tenant-id': selectedTenantId },
+                      );
                       setNotifications(rows);
                     } catch {
                       setNotifications([]);
@@ -2588,8 +5113,24 @@ export function App() {
               </div>
               <div className="tableWrap">
                 <table>
-                  <thead><tr><th>{t.date}</th><th>{t.description}</th><th>{t.status}</th></tr></thead>
-                  <tbody>{notifications.map((n) => <tr key={n.id}><td>{new Date(n.createdAt).toLocaleString()}</td><td>{n.action}</td><td><span className="badge">{n.metadata?.toStatus ?? 'NEW'}</span></td></tr>)}</tbody>
+                  <thead>
+                    <tr>
+                      <th>{t.date}</th>
+                      <th>{t.description}</th>
+                      <th>{t.status}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {notifications.map((n) => (
+                      <tr key={n.id}>
+                        <td>{new Date(n.createdAt).toLocaleString()}</td>
+                        <td>{n.action}</td>
+                        <td>
+                          <span className="badge">{n.metadata?.toStatus ?? 'NEW'}</span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
                 </table>
               </div>
             </article>
@@ -2602,7 +5143,7 @@ export function App() {
               <div className="accountingHead">
                 <div>
                   <h3>{t.preAccounting}</h3>
-                  <p className="muted accountingLead">{t.landingSvc6d}</p>
+                  <p className="muted accountingLead">{t.accountingDashboardLead}</p>
                 </div>
                 <button type="button" className="ghostBtn accountingExportBtn" onClick={exportLedgerCsv} disabled={ledger.length === 0}>
                   <Download size={16} aria-hidden />
@@ -2679,6 +5220,13 @@ export function App() {
                     </tr>
                   </thead>
                   <tbody>
+                    {ledger.length === 0 ? (
+                      <tr>
+                        <td colSpan={4} className="ledgerEmptyCell">
+                          {t.ledgerEmptyHint}
+                        </td>
+                      </tr>
+                    ) : null}
                     {ledger.map((row) => (
                       <tr key={row.id}>
                         <td>{new Date(row.createdAt).toLocaleString(lang === 'tr' ? 'tr-TR' : 'en-US')}</td>
@@ -2711,6 +5259,10 @@ export function App() {
               <h3>{t.saasPlans}</h3>
               <p className="muted">{t.saasPlansLead}</p>
               <h4 className="saasPlansSub">{t.saasPlansPackages}</h4>
+              <p className="muted saasStripeHint">
+                {stripeStatus?.secretKeyConfigured ? t.stripeSecretOk : t.stripeSecretMissing}{' '}
+                {stripeStatus?.publishableKey ? `${t.stripePublishablePrefix} ${stripeStatus.publishableKey.slice(0, 12)}…` : t.stripePublishableMissing}
+              </p>
               <div className="tableWrap">
                 <table>
                   <thead>
@@ -2720,7 +5272,8 @@ export function App() {
                       <th>{t.amount}</th>
                       <th>{t.plan}</th>
                       <th>{t.sortOrderLabel}</th>
-                      <th>Stripe</th>
+                      <th>{t.stripeProductCol}</th>
+                      <th>{t.stripePriceCol}</th>
                       <th>{t.status}</th>
                       <th>{t.action}</th>
                     </tr>
@@ -2776,6 +5329,16 @@ export function App() {
                         <td>
                           <input
                             className="saasInlineInput"
+                            placeholder="prod_..."
+                            value={p.stripeProductId ?? ''}
+                            onChange={(e) =>
+                              setLocalPlans((prev) => prev.map((x) => (x.id === p.id ? { ...x, stripeProductId: e.target.value || null } : x)))
+                            }
+                          />
+                        </td>
+                        <td>
+                          <input
+                            className="saasInlineInput"
                             placeholder="price_..."
                             value={p.stripePriceId ?? ''}
                             onChange={(e) =>
@@ -2808,6 +5371,7 @@ export function App() {
                                   sortOrder: p.sortOrder ?? 0,
                                   badgeLabel: p.badgeLabel,
                                   stripePriceId: p.stripePriceId,
+                                  stripeProductId: p.stripeProductId,
                                   featureLines: fl,
                                   priceAmount: Number(p.priceAmount),
                                   currency: 'TRY',
@@ -2946,21 +5510,161 @@ export function App() {
             </article>
           </section>
         ) : null}
+          </>
+        ) : null}
       </section>
 
-      {employeeModalOpen ? (
+      {userModalMode ? (
         <div className="modalBackdrop">
           <div className="modalCard">
-            <h3>{t.addEmployee}</h3>
+            <h3>{userModalMode === 'employee' ? t.addEmployee : t.addManager}</h3>
             <div className="formGrid">
-              <label>{t.name}<input value={newEmployee.name} onChange={(e) => setNewEmployee((s) => ({ ...s, name: e.target.value }))} /></label>
-              <label>{t.email}<input value={newEmployee.email} onChange={(e) => setNewEmployee((s) => ({ ...s, email: e.target.value }))} /></label>
-              <label>{t.role}<input value={newEmployee.role} onChange={(e) => setNewEmployee((s) => ({ ...s, role: e.target.value }))} /></label>
-              <label>{t.branch}<input value={newEmployee.branch} onChange={(e) => setNewEmployee((s) => ({ ...s, branch: e.target.value }))} /></label>
+              <label>
+                {t.name}
+                <input
+                  value={userCreateForm.fullName}
+                  onChange={(e) => setUserCreateForm((s) => ({ ...s, fullName: e.target.value }))}
+                />
+              </label>
+              <label>
+                {t.email}
+                <input
+                  type="email"
+                  value={userCreateForm.email}
+                  onChange={(e) => setUserCreateForm((s) => ({ ...s, email: e.target.value }))}
+                />
+              </label>
+              <label>
+                {t.branch}
+                <select
+                  value={userCreateForm.branchId}
+                  onChange={(e) => setUserCreateForm((s) => ({ ...s, branchId: e.target.value }))}
+                >
+                  <option value="">{t.selectBranch}</option>
+                  {branches.map((b) => (
+                    <option key={b.id} value={b.id}>
+                      {b.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {userModalMode === 'employee' ? (
+                <label>
+                  {t.specialty}
+                  <input
+                    value={userCreateForm.specialty}
+                    onChange={(e) => setUserCreateForm((s) => ({ ...s, specialty: e.target.value }))}
+                  />
+                </label>
+              ) : null}
             </div>
             <div className="modalActions">
-              <button className="ghostBtn" onClick={() => setEmployeeModalOpen(false)}>{t.cancel}</button>
-              <button className="primaryBtn" onClick={() => setEmployeeModalOpen(false)}>{t.save}</button>
+              <button className="ghostBtn" type="button" onClick={() => setUserModalMode(null)}>
+                {t.cancel}
+              </button>
+              <button
+                className="primaryBtn"
+                type="button"
+                disabled={!selectedTenantId || !userCreateForm.email.trim() || !userCreateForm.fullName.trim()}
+                onClick={async () => {
+                  if (!selectedTenantId) return;
+                  try {
+                    await apiPost(
+                      '/tenants/users',
+                      {
+                        email: userCreateForm.email.trim(),
+                        fullName: userCreateForm.fullName.trim(),
+                        branchId: userCreateForm.branchId || null,
+                        isStaff: userModalMode === 'employee',
+                        specialty: userModalMode === 'employee' ? userCreateForm.specialty || 'General' : null,
+                        roleCodes: userModalMode === 'employee' ? ['STAFF'] : ['ADMIN'],
+                      },
+                      { 'x-tenant-id': selectedTenantId },
+                    );
+                    const rows = await apiGetWithHeaders<TenantUserRow[]>('/tenants/users', { 'x-tenant-id': selectedTenantId });
+                    setTenantUsers(rows);
+                    setUserModalMode(null);
+                    setUserCreateForm({ email: '', fullName: '', branchId: '', specialty: '' });
+                    setActionMessage(t.userCreated);
+                  } catch {
+                    setActionMessage(t.userCreateFailed);
+                  }
+                }}
+              >
+                {t.save}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {serviceEditDraft ? (
+        <div className="modalBackdrop">
+          <div className="modalCard">
+            <h3>{t.editService}</h3>
+            <div className="formGrid">
+              <label>
+                {t.name}
+                <input
+                  value={serviceEditDraft.name}
+                  onChange={(e) => setServiceEditDraft((s) => (s ? { ...s, name: e.target.value } : s))}
+                />
+              </label>
+              <label>
+                {t.duration}
+                <input
+                  type="number"
+                  value={serviceEditDraft.durationMin}
+                  onChange={(e) =>
+                    setServiceEditDraft((s) => (s ? { ...s, durationMin: Number(e.target.value) } : s))
+                  }
+                />
+              </label>
+              <label>
+                {t.amount}
+                <input
+                  type="number"
+                  value={serviceEditDraft.priceAmount}
+                  onChange={(e) =>
+                    setServiceEditDraft((s) => (s ? { ...s, priceAmount: Number(e.target.value) } : s))
+                  }
+                />
+              </label>
+            </div>
+            <div className="modalActions">
+              <button className="ghostBtn" type="button" onClick={() => setServiceEditDraft(null)}>
+                {t.cancel}
+              </button>
+              <button
+                className="primaryBtn"
+                type="button"
+                disabled={!selectedTenantId || isDemoTenantId(selectedTenantId)}
+                onClick={async () => {
+                  if (!selectedTenantId || !serviceEditDraft) return;
+                  try {
+                    await apiPatch(
+                      `/services/${serviceEditDraft.id}`,
+                      {
+                        name: serviceEditDraft.name.trim(),
+                        durationMin: serviceEditDraft.durationMin,
+                        priceAmount: serviceEditDraft.priceAmount,
+                      },
+                      { 'x-tenant-id': selectedTenantId },
+                    );
+                    const rows = await apiGetWithHeaders<ServiceLite[]>(
+                      `/services?branchId=${serviceForm.branchId}`,
+                      { 'x-tenant-id': selectedTenantId },
+                    );
+                    setBranchServices(rows);
+                    setServiceEditDraft(null);
+                    setActionMessage(t.serviceUpdated);
+                  } catch {
+                    setActionMessage(t.serviceUpdateFailed);
+                  }
+                }}
+              >
+                {t.save}
+              </button>
             </div>
           </div>
         </div>

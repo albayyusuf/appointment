@@ -1,10 +1,20 @@
 # Appointment Platform
 
-Multi-tenant reservation SaaS platform (beauty + healthcare) with:
+Multi-tenant reservation SaaS platform (beauty, healthcare **+ restaurant** seating) with:
 - NestJS backend + Prisma + PostgreSQL
 - React web admin panel
 - Seeded fake data
 - Password-protected Swagger
+
+## Anasayfa paketleri (katalog)
+
+| Kod | Görünen ad (katman) | Fiyat (TRY) | Dönem | Sıra | Stripe Product ID |
+|-----|---------------------|-------------|-------|------|-------------------|
+| `STARTER_MONTHLY` | Başlangıç | 1299 | Aylık | 1 | `prod_UCDKAVRNr1ro2o` |
+| `GROWTH_MONTHLY` | Orta ölçek | 3499 | Aylık | 2 | `prod_UCDKaBRouUUOdv` |
+| `ENTERPRISE_YEARLY` | Kurumsal | 34999 | Yıllık | 3 | `prod_UCDKfsX9j3LtRr` |
+
+Liste `GET /saas/plans` ve seed (`apps/api/prisma/seed.mjs`) ile uyumludur. **`price_...`** değerlerini Süper admin → SaaS Plans ekranından veya Stripe’da ilgili ürüne bağlı recurring price olarak girebilirsiniz; boşsa API `stripeProductId` üzerinden uygun fiyatı seçer.
 
 ## Requirements
 - Node.js `22+`
@@ -35,6 +45,8 @@ Run migrations + seed fake data:
 npm run bootstrap
 ```
 
+**Demo veri:** Her kiracıda **tek şube** (`HQ`); şube görünen adı sektöre göre (**güzellik** → “Merkez Salon”, **sağlık** → “Poliklinik Merkezi”, **restoran** → “Ana Restoran”). Restoranda **3 oturma alanı** (Bahçe, Teras, İç Salon). Eski kayıtları sıfırlamak için geliştirme ortamında `cd apps/api && npx prisma migrate reset` kullanın.
+
 ## Run (Single Command)
 
 Start both backend and frontend together:
@@ -63,6 +75,18 @@ If env vars are missing, defaults are:
 - user: `admin`
 - pass: `ChangeMe123!`
 
+## Restoran & fiyat kuralları
+
+- Misafir akışında **RESTAURANT** dikeyinde `staffUserId` alanı, API tarafında **restoran alanı** (`RestaurantArea`) kimliği olarak kullanılır.
+- **Önemli gün fiyatı:** `BranchPricingDay` (şube + tarih + isteğe bağlı `%` ek / sabit ek). Kural yoksa `GET /guest/pricing-hint` → `hasRule: false` (liste fiyatı; ek günlük ücret yok).
+- Panel: **Operasyon Merkezi** → restoran kiracısında “önemli gün fiyatı” kartı; demo özel gün tarihi `seed.mjs` ile **UTC bugün + 3 gün** ile hizalıdır (`demoReservationData.getDemoSpecialPricingDateYmd()`).
+
+## Kalite kontrol (geliştirici)
+
+- `cd apps/web && npm run build` — TS + Vite
+- `cd apps/api && npm run build` — Nest derlemesi
+- TR/EN çeviri anahtarları `apps/web/src/i18n/translations.ts` içinde eşit sayıda (470/470); yeni metin eklerken her iki dile ekleyin.
+
 ## Useful Commands
 
 ```bash
@@ -87,15 +111,5 @@ git push origin main
 3. Push bittikten sonra URL’den şifreyi kaldırın (güvenlik):
 
 ```bash
-git remote set-url origin https://github.com/albayyusuf/appointment.git
-```
-
-**Not:** `GITHUB_KULLANICI_ADINIZ` GitHub kullanıcı adınız; `TOKENINIZ` PAT’tir. **Token’ı asla bu dosyaya yazmayın** — repo herkese açıksa token sızmış olur; hemen GitHub’da iptal edip yenisini oluşturun.
-
-Push için tek seferlik (token’ı sadece kendi terminalinizde yapıştırın):
-
-```bash
-git remote set-url origin https://GITHUB_KULLANICI_ADINIZ:TOKENINIZ@github.com/albayyusuf/appointment.git
-git push origin main
 git remote set-url origin https://github.com/albayyusuf/appointment.git
 ```

@@ -11,11 +11,20 @@ import {
 const prisma = new PrismaClient();
 
 const tenantSeeds = [
-  { slug: 'demo-tenant', name: 'Demo Tenant', vertical: VerticalType.BEAUTY, planCode: 'GROWTH_MONTHLY' },
-  { slug: 'ankara-clinic', name: 'Ankara Smile Clinic', vertical: VerticalType.HEALTH, planCode: 'STARTER_MONTHLY' },
-  { slug: 'izmir-beauty', name: 'Izmir Beauty Lounge', vertical: VerticalType.BEAUTY, planCode: 'STARTER_MONTHLY' },
-  { slug: 'bursa-hospital', name: 'Bursa Med Center', vertical: VerticalType.HEALTH, planCode: 'ENTERPRISE_YEARLY' },
+  { slug: 'demo-tenant', name: 'Aura Güzellik Merkezi', vertical: VerticalType.BEAUTY, planCode: 'GROWTH_MONTHLY' },
+  { slug: 'ankara-clinic', name: 'Çankaya Ağız ve Diş Polikliniği', vertical: VerticalType.HEALTH, planCode: 'STARTER_MONTHLY' },
+  { slug: 'izmir-beauty', name: 'Glow İzmir Güzellik Salonu', vertical: VerticalType.BEAUTY, planCode: 'STARTER_MONTHLY' },
+  { slug: 'bursa-hospital', name: 'Bursa Kardiyoloji Polikliniği', vertical: VerticalType.HEALTH, planCode: 'ENTERPRISE_YEARLY' },
+  { slug: 'istanbul-restaurant', name: 'Bebek Boğaz Restoran', vertical: VerticalType.RESTAURANT, planCode: 'GROWTH_MONTHLY' },
 ];
+
+/** Tek şube adı: sektöre uygun (güzellik → salon, sağlık → poliklinik, restoran → restoran) */
+function hqBranchName(tenantName, vertical) {
+  if (vertical === VerticalType.BEAUTY) return `${tenantName} · Merkez Salon`;
+  if (vertical === VerticalType.HEALTH) return `${tenantName} · Poliklinik Merkezi`;
+  if (vertical === VerticalType.RESTAURANT) return `${tenantName} · Ana Restoran`;
+  return `${tenantName} · Merkez`;
+}
 
 function statusForIndex(index) {
   if (index % 4 === 0) return SubscriptionStatus.ACTIVE;
@@ -35,22 +44,30 @@ async function seedTenant(tenantMeta, plans, index) {
     },
   });
 
-  const branchCodes = ['HQ', 'B1', 'B2'];
-  const branches = [];
-  for (const [idx, code] of branchCodes.entries()) {
-    const branch = await prisma.branch.upsert({
-      where: { tenantId_code: { tenantId: tenant.id, code } },
-      update: { name: `${tenantMeta.name} Branch ${idx + 1}` },
-      create: {
-        tenantId: tenant.id,
-        name: `${tenantMeta.name} Branch ${idx + 1}`,
-        code,
-        city: ['Istanbul', 'Ankara', 'Izmir'][idx % 3],
-        country: 'TR',
-      },
-    });
-    branches.push(branch);
-  }
+  /** Tek şube (Merkez / HQ) — şirket adıyla uyumlu; tenant değişince listede net ayrım */
+  const cityBySlug = {
+    'demo-tenant': 'İstanbul',
+    'ankara-clinic': 'Ankara',
+    'izmir-beauty': 'İzmir',
+    'bursa-hospital': 'Bursa',
+    'istanbul-restaurant': 'İstanbul',
+  };
+  const city = cityBySlug[tenantMeta.slug] ?? 'İstanbul';
+  const branchDisplayName = hqBranchName(tenantMeta.name, tenantMeta.vertical);
+  const branch = await prisma.branch.upsert({
+    where: { tenantId_code: { tenantId: tenant.id, code: 'HQ' } },
+    update: {
+      name: branchDisplayName,
+    },
+    create: {
+      tenantId: tenant.id,
+      name: branchDisplayName,
+      code: 'HQ',
+      city,
+      country: 'TR',
+    },
+  });
+  const branches = [branch];
 
   const roleAdmin = await prisma.role.upsert({
     where: { tenantId_code: { tenantId: tenant.id, code: 'ADMIN' } },
@@ -95,9 +112,13 @@ async function seedTenant(tenantMeta, plans, index) {
     create: { tenantId: tenant.id, userId: adminUser.id, roleId: roleAdmin.id },
   });
 
-  const staffSpecs = tenantMeta.vertical === VerticalType.BEAUTY
-    ? ['Stylist', 'Color Specialist', 'Skin Therapist', 'Nail Expert']
-    : ['Dentist', 'Assistant', 'Orthodontist', 'Hygienist'];
+  /** Demo: az personel — takvim okunaklı kalsın */
+  const staffSpecs =
+    tenantMeta.vertical === VerticalType.RESTAURANT
+      ? []
+      : tenantMeta.vertical === VerticalType.BEAUTY
+        ? ['Stylist', 'Color Specialist', 'Skin Therapist']
+        : ['Dentist', 'Assistant', 'Orthodontist'];
 
   const staffUsers = [];
   for (let s = 0; s < staffSpecs.length; s += 1) {
@@ -134,27 +155,40 @@ async function seedTenant(tenantMeta, plans, index) {
     });
   }
 
+  const coreCatName =
+    tenantMeta.vertical === VerticalType.BEAUTY
+      ? 'Beauty Core'
+      : tenantMeta.vertical === VerticalType.HEALTH
+        ? 'Health Core'
+        : 'Restaurant Core';
+
   const categoryA = await prisma.serviceCategory.upsert({
     where: {
       tenantId_name_vertical: {
         tenantId: tenant.id,
-        name: tenantMeta.vertical === VerticalType.BEAUTY ? 'Beauty Core' : 'Health Core',
+        name: coreCatName,
         vertical: tenantMeta.vertical,
       },
     },
     update: {},
     create: {
       tenantId: tenant.id,
-      name: tenantMeta.vertical === VerticalType.BEAUTY ? 'Beauty Core' : 'Health Core',
+      name: coreCatName,
       vertical: tenantMeta.vertical,
     },
   });
 
-  const serviceNames = tenantMeta.vertical === VerticalType.BEAUTY
-    ? ['Hair Cut', 'Skin Care', 'Nail Care']
-    : ['Dental Check', 'Orthodontic Consult', 'Teeth Cleaning'];
+  const serviceNames =
+    tenantMeta.vertical === VerticalType.BEAUTY
+      ? ['Hair Cut', 'Skin Care', 'Nail Care']
+      : tenantMeta.vertical === VerticalType.HEALTH
+        ? ['Dental Check', 'Orthodontic Consult', 'Teeth Cleaning']
+        : ['Akşam yemeği (2 kişi)', 'Brunch masası', 'Özel gün menüsü'];
   const services = [];
   for (let i = 0; i < serviceNames.length; i += 1) {
+    const durationMin =
+      tenantMeta.vertical === VerticalType.RESTAURANT ? [90, 75, 120][i] : 30 + i * 15;
+    const priceAmount = tenantMeta.vertical === VerticalType.RESTAURANT ? [1200, 850, 2100][i] : 500 + i * 300;
     const service = await prisma.service.upsert({
       where: { id: `svc-${tenantMeta.slug}-${i + 1}` },
       update: { name: serviceNames[i] },
@@ -164,16 +198,97 @@ async function seedTenant(tenantMeta, plans, index) {
         branchId: branches[i % branches.length].id,
         categoryId: categoryA.id,
         name: serviceNames[i],
-        durationMin: 30 + i * 15,
-        priceAmount: 500 + i * 300,
+        durationMin,
+        priceAmount,
         currency: 'TRY',
       },
     });
     services.push(service);
   }
 
+  /** Restoran: gelir merkezi alanları + açılış saatleri + örnek özel gün fiyatı */
+  let restaurantAreas = [];
+  if (tenantMeta.vertical === VerticalType.RESTAURANT) {
+    const areaDefs = [
+      { code: 'GARDEN', name: 'Bahçe', revenueLabel: 'RC-BAHÇE', sortOrder: 1 },
+      { code: 'TERRACE', name: 'Teras', revenueLabel: 'RC-TERAS', sortOrder: 2 },
+      { code: 'MAIN', name: 'İç Salon', revenueLabel: 'RC-İÇ', sortOrder: 3 },
+      { code: 'VIP', name: 'VIP Köşe', revenueLabel: 'RC-VIP', sortOrder: 4 },
+    ];
+    for (const a of areaDefs) {
+      const area = await prisma.restaurantArea.upsert({
+        where: {
+          tenantId_branchId_code: { tenantId: tenant.id, branchId: branches[0].id, code: a.code },
+        },
+        update: { name: a.name, revenueLabel: a.revenueLabel, sortOrder: a.sortOrder, isActive: true },
+        create: {
+          tenantId: tenant.id,
+          branchId: branches[0].id,
+          name: a.name,
+          code: a.code,
+          revenueLabel: a.revenueLabel,
+          sortOrder: a.sortOrder,
+          capacity: 8,
+          isActive: true,
+        },
+      });
+      restaurantAreas.push(area);
+    }
+
+    const nowSeed = new Date();
+    const todaySeed = new Date(Date.UTC(nowSeed.getUTCFullYear(), nowSeed.getUTCMonth(), nowSeed.getUTCDate()));
+
+    /** Bugünden itibaren 10 gün: her alan için tek servis penceresi (12:00–23:00 yerel UTC günü) */
+    for (let d = 0; d < 10; d += 1) {
+      const day = new Date(todaySeed.getTime() + d * 24 * 60 * 60 * 1000);
+      for (let ai = 0; ai < restaurantAreas.length; ai += 1) {
+        const shiftStart = new Date(day);
+        shiftStart.setUTCHours(12, 0, 0, 0);
+        const shiftEnd = new Date(day);
+        shiftEnd.setUTCHours(23, 0, 0, 0);
+        const sid = `ras-${tenantMeta.slug}-${restaurantAreas[ai].code}-${d}`;
+        await prisma.restaurantAreaSchedule.upsert({
+          where: { id: sid },
+          update: { startsAt: shiftStart, endsAt: shiftEnd },
+          create: {
+            id: sid,
+            tenantId: tenant.id,
+            branchId: branches[0].id,
+            restaurantAreaId: restaurantAreas[ai].id,
+            startsAt: shiftStart,
+            endsAt: shiftEnd,
+          },
+        });
+      }
+    }
+
+    const specialDay = new Date(todaySeed.getTime() + 3 * 24 * 60 * 60 * 1000);
+    specialDay.setUTCHours(12, 0, 0, 0);
+    await prisma.branchPricingDay.upsert({
+      where: { branchId_date: { branchId: branches[0].id, date: specialDay } },
+      update: {
+        label: 'Önemli gün — ek ücret',
+        surchargePercent: 15,
+        extraAmount: 0,
+        note: 'Örnek: özel menü günü %15 ek ücret',
+        isActive: true,
+      },
+      create: {
+        tenantId: tenant.id,
+        branchId: branches[0].id,
+        date: specialDay,
+        label: 'Önemli gün — ek ücret',
+        surchargePercent: 15,
+        extraAmount: 0,
+        note: 'Örnek: özel menü günü %15 ek ücret',
+        isActive: true,
+      },
+    });
+  }
+
   const customers = [];
-  for (let c = 0; c < 40; c += 1) {
+  const customerCount = 8;
+  for (let c = 0; c < customerCount; c += 1) {
     const customer = await prisma.customer.upsert({
       where: { id: `cus-${tenantMeta.slug}-${c + 1}` },
       update: { fullName: `${tenantMeta.name} Customer ${c + 1}` },
@@ -191,36 +306,39 @@ async function seedTenant(tenantMeta, plans, index) {
   const now = new Date();
   const today = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 
-  // Staff weekly shifts with deterministic off-days.
-  for (let s = 0; s < staffUsers.length; s += 1) {
-    for (let d = -2; d < 14; d += 1) {
-      const day = new Date(today.getTime() + d * 24 * 60 * 60 * 1000);
-      const weekday = day.getUTCDay(); // 0 sun ... 6 sat
-      const offDayRule = (weekday === 0) || ((s + index) % 2 === 0 && weekday === 2) || ((s + index) % 2 === 1 && weekday === 5);
-      if (offDayRule) continue;
-      const shiftStart = new Date(day);
-      shiftStart.setUTCHours(8 + (s % 2), 0, 0, 0);
-      const shiftEnd = new Date(day);
-      shiftEnd.setUTCHours(17 + (s % 2), 0, 0, 0);
-      await prisma.schedule.upsert({
-        where: { id: `sch-${tenantMeta.slug}-${staffUsers[s].id}-${d}` },
-        update: { startsAt: shiftStart, endsAt: shiftEnd },
-        create: {
-          id: `sch-${tenantMeta.slug}-${staffUsers[s].id}-${d}`,
-          tenantId: tenant.id,
-          branchId: staffUsers[s].branchId ?? branches[0].id,
-          staffUserId: staffUsers[s].id,
-          startsAt: shiftStart,
-          endsAt: shiftEnd,
-        },
-      });
+  // Staff weekly shifts with deterministic off-days (restoran tenant'ta personel yok).
+  if (staffUsers.length > 0) {
+    for (let s = 0; s < staffUsers.length; s += 1) {
+      for (let d = 0; d < 10; d += 1) {
+        const day = new Date(today.getTime() + d * 24 * 60 * 60 * 1000);
+        const weekday = day.getUTCDay(); // 0 sun ... 6 sat
+        const offDayRule = (weekday === 0) || ((s + index) % 2 === 0 && weekday === 2) || ((s + index) % 2 === 1 && weekday === 5);
+        if (offDayRule) continue;
+        const shiftStart = new Date(day);
+        shiftStart.setUTCHours(8 + (s % 2), 0, 0, 0);
+        const shiftEnd = new Date(day);
+        shiftEnd.setUTCHours(17 + (s % 2), 0, 0, 0);
+        await prisma.schedule.upsert({
+          where: { id: `sch-${tenantMeta.slug}-${staffUsers[s].id}-${d}` },
+          update: { startsAt: shiftStart, endsAt: shiftEnd },
+          create: {
+            id: `sch-${tenantMeta.slug}-${staffUsers[s].id}-${d}`,
+            tenantId: tenant.id,
+            branchId: staffUsers[s].branchId ?? branches[0].id,
+            staffUserId: staffUsers[s].id,
+            startsAt: shiftStart,
+            endsAt: shiftEnd,
+          },
+        });
+      }
     }
   }
 
-  for (let i = 0; i < 80; i += 1) {
-    const dayOffset = Math.floor(i / 8) - 2;
+  const appointmentSeedCount = 14;
+  for (let i = 0; i < appointmentSeedCount; i += 1) {
+    const dayOffset = i % 7;
     const day = new Date(today.getTime() + dayOffset * 24 * 60 * 60 * 1000);
-    const hour = 9 + (i % 8);
+    const hour = 10 + (i % 6);
     const startsAt = new Date(day);
     startsAt.setUTCHours(hour, (i % 2) * 30, 0, 0);
     const service = services[i % services.length];
@@ -243,7 +361,10 @@ async function seedTenant(tenantMeta, plans, index) {
         branchId: branches[i % branches.length].id,
         customerId: customers[i % customers.length].id,
         serviceId: service.id,
-        staffUserId: staffUsers[i % staffUsers.length].id,
+        staffUserId:
+          tenantMeta.vertical === VerticalType.RESTAURANT ? null : staffUsers[i % staffUsers.length].id,
+        restaurantAreaId:
+          tenantMeta.vertical === VerticalType.RESTAURANT ? restaurantAreas[i % restaurantAreas.length].id : null,
         createdByUserId: adminUser.id,
         startsAt,
         endsAt,
@@ -334,30 +455,32 @@ async function main() {
   });
 
   const starterFeatures = [
-    'Güzellik salonu, barber, nail: tek–çift şube',
-    'Misafir rezervasyonu, çalışan takvimi, bildirimler',
+    'Tek ve çift şube; misafir rezervasyonu ve çalışan takvimi',
+    'Bildirimler ve temel operasyon akışları',
     'Ön muhasebe / kasa kayıtları (paket kotasına göre)',
   ];
   const growthFeatures = [
-    'Klinik & çok şube: şube bazlı hizmet ve roller',
-    'Operasyon ekranı, atama, durum akışı',
-    'Raporlama ve SaaS faturalama entegrasyonuna hazır',
+    'Çok şube yönetimi; şube bazlı hizmet ve roller',
+    'Operasyon ekranı, atama ve durum takibi',
+    'Raporlama ve faturalama entegrasyonuna hazır altyapı',
   ];
   const entFeatures = [
-    'Franchise / zincir: sınırsız şube kotası',
-    'Kurumsal SLA, özel entegrasyon ve veri izolasyonu',
-    'Havale/EFT + Stripe ile tahsilat (platform hesapları)',
+    'Yüksek şube ve personel kotası; büyük hacim randevu',
+    'SLA, özel entegrasyon ve veri izolasyonu seçenekleri',
+    'Havale/EFT ve Stripe ile platform üzerinden tahsilat',
   ];
 
   const plans = await Promise.all([
     prisma.plan.upsert({
       where: { code: 'STARTER_MONTHLY' },
       update: {
-        name: 'Salon & Studio',
-        description: 'Güzellik, berber, nail ve tek şube işletmeleri için giriş paketi.',
+        name: 'Başlangıç',
+        description: 'Küçük ve tek nokta işletmeler için giriş seviyesi paket.',
         sortOrder: 1,
-        badgeLabel: 'Başlangıç',
+        isActive: true,
+        badgeLabel: null,
         stripePriceId: null,
+        stripeProductId: 'prod_UCDKAVRNr1ro2o',
         featureLines: starterFeatures,
         priceAmount: 1299,
         maxBranches: 2,
@@ -367,11 +490,12 @@ async function main() {
       },
       create: {
         code: 'STARTER_MONTHLY',
-        name: 'Salon & Studio',
-        description: 'Güzellik, berber, nail ve tek şube işletmeleri için giriş paketi.',
+        name: 'Başlangıç',
+        description: 'Küçük ve tek nokta işletmeler için giriş seviyesi paket.',
         sortOrder: 1,
-        badgeLabel: 'Başlangıç',
+        badgeLabel: null,
         stripePriceId: null,
+        stripeProductId: 'prod_UCDKAVRNr1ro2o',
         featureLines: starterFeatures,
         priceAmount: 1299,
         currency: 'TRY',
@@ -380,16 +504,19 @@ async function main() {
         maxStaff: 18,
         maxAppointmentsMo: 3500,
         trialDays: 14,
+        isActive: true,
       },
     }),
     prisma.plan.upsert({
       where: { code: 'GROWTH_MONTHLY' },
       update: {
-        name: 'Klinik & Operasyon',
-        description: 'Sağlık, diş ve çok şubeli klinikler için operasyon odağı.',
+        name: 'Orta ölçek',
+        description: 'Büyüyen ve çok şubeli işletmeler için orta ölçek paket.',
         sortOrder: 2,
+        isActive: true,
         badgeLabel: 'En çok tercih edilen',
         stripePriceId: null,
+        stripeProductId: 'prod_UCDKaBRouUUOdv',
         featureLines: growthFeatures,
         priceAmount: 3499,
         maxBranches: 12,
@@ -399,11 +526,12 @@ async function main() {
       },
       create: {
         code: 'GROWTH_MONTHLY',
-        name: 'Klinik & Operasyon',
-        description: 'Sağlık, diş ve çok şubeli klinikler için operasyon odağı.',
+        name: 'Orta ölçek',
+        description: 'Büyüyen ve çok şubeli işletmeler için orta ölçek paket.',
         sortOrder: 2,
         badgeLabel: 'En çok tercih edilen',
         stripePriceId: null,
+        stripeProductId: 'prod_UCDKaBRouUUOdv',
         featureLines: growthFeatures,
         priceAmount: 3499,
         currency: 'TRY',
@@ -412,16 +540,19 @@ async function main() {
         maxStaff: 90,
         maxAppointmentsMo: 30000,
         trialDays: 14,
+        isActive: true,
       },
     }),
     prisma.plan.upsert({
       where: { code: 'ENTERPRISE_YEARLY' },
       update: {
-        name: 'Zincir & Franchise',
-        description: 'Ülke çapı zincir, hastane grupları ve franchise yönetimi.',
+        name: 'Kurumsal',
+        description: 'Ülke çapı organizasyonlar ve yüksek iş hacmi için kurumsal paket.',
         sortOrder: 3,
-        badgeLabel: 'Kurumsal',
+        isActive: true,
+        badgeLabel: null,
         stripePriceId: null,
+        stripeProductId: 'prod_UCDKfsX9j3LtRr',
         featureLines: entFeatures,
         priceAmount: 34999,
         maxBranches: 999,
@@ -431,11 +562,12 @@ async function main() {
       },
       create: {
         code: 'ENTERPRISE_YEARLY',
-        name: 'Zincir & Franchise',
-        description: 'Ülke çapı zincir, hastane grupları ve franchise yönetimi.',
+        name: 'Kurumsal',
+        description: 'Ülke çapı organizasyonlar ve yüksek iş hacmi için kurumsal paket.',
         sortOrder: 3,
-        badgeLabel: 'Kurumsal',
+        badgeLabel: null,
         stripePriceId: null,
+        stripeProductId: 'prod_UCDKfsX9j3LtRr',
         featureLines: entFeatures,
         priceAmount: 34999,
         currency: 'TRY',
@@ -444,6 +576,7 @@ async function main() {
         maxStaff: 9999,
         maxAppointmentsMo: 500000,
         trialDays: 30,
+        isActive: true,
       },
     }),
   ]);
